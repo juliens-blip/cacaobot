@@ -1,0 +1,81 @@
+// cTrader Open API Protobuf Stub
+// Full definitions: https://github.com/spotware/OpenApiProto
+//
+// This is a minimal stub to allow compilation.
+// Replace with official .proto files from cTrader for production use.
+
+syntax = "proto3";
+
+package ProtoOA;
+
+// Stub message definitions
+// TODO: Replace with official cTrader proto files
+
+message ProtoOAApplicationAuthReq {
+    string clientId = 1;
+    string clientSecret = 2;
+}
+
+message ProtoOAApplicationAuthRes {
+    string accessToken = 1;
+}
+
+message ProtoOAAccountAuthReq {
+    string accessToken = 1;
+    int64 accountId = 2;
+}
+
+message ProtoOAAccountAuthRes {
+    int64 accountId = 1;
+}
+
+message ProtoOASubscribeSpotsReq {
+    int64 accountId = 1;
+    repeated string symbolName = 2;
+}
+
+message ProtoOASpotEvent {
+    int64 accountId = 1;
+    string symbolName = 2;
+    double bid = 3;
+    double ask = 4;
+    int64 timestamp = 5;
+}
+
+message ProtoOANewOrderReq {
+    int64 accountId = 1;
+    string symbolName = 2;
+    TradeSide tradeSide = 3;
+    int64 volume = 4;
+    OrderType orderType = 5;
+    double limitPrice = 6;
+    double stopPrice = 7;
+    double stopLoss = 8;
+    double takeProfit = 9;
+}
+
+message ProtoOAExecutionEvent {
+    int64 accountId = 1;
+    int64 orderId = 2;
+    int64 positionId = 3;
+    OrderStatus status = 4;
+    double executionPrice = 5;
+}
+
+enum TradeSide {
+    BUY = 0;
+    SELL = 1;
+}
+
+enum OrderType {
+    MARKET = 0;
+    LIMIT = 1;
+    STOP = 2;
+}
+
+enum OrderStatus {
+    PENDING = 0;
+    FILLED = 1;
+    REJECTED = 2;
+    CANCELLED = 3;
+}

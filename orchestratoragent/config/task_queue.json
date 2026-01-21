@@ -1,0 +1,75 @@
+{
+  "orchestration": {
+    "session_name": "palm-oil-orchestration",
+    "project_path": "/home/julien/Documents/palm-oil-bot",
+    "memory_file": "CLAUDE.md",
+    "status_file": "ORCHESTRATION_STATUS.md",
+    "handoff_threshold_percent": 98,
+    "check_interval_seconds": 30,
+    "task_timeout_minutes": 15
+  },
+  "agents": {
+    "claude": {
+      "window": 0,
+      "role": "orchestrator",
+      "specialties": ["architecture", "complex_decisions", "orchestration", "critical_code"],
+      "max_concurrent_tasks": 2,
+      "can_be_orchestrator": true
+    },
+    "amp": {
+      "window": 1,
+      "role": "worker",
+      "specialties": ["implementation", "features", "api_routes", "crud", "testing"],
+      "max_concurrent_tasks": 3,
+      "can_be_orchestrator": true
+    },
+    "antigravity": {
+      "window": 3,
+      "role": "worker",
+      "specialties": ["deep_analysis", "architecture_review", "optimization", "strategy", "extended_thinking"],
+      "max_concurrent_tasks": 1,
+      "can_be_orchestrator": false
+    },
+    "codex": {
+      "window": 4,
+      "role": "worker",
+      "specialties": ["code_generation", "types", "tests", "boilerplate", "refactoring"],
+      "max_concurrent_tasks": 2,
+      "can_be_orchestrator": false
+    }
+  },
+  "task_queue": {
+    "pending": [],
+    "in_progress": [],
+    "completed": [],
+    "blocked": []
+  },
+  "task_templates": {
+    "implementation": {
+      "default_agent": "amp",
+      "estimated_minutes": 15,
+      "requires_tests": true
+    },
+    "analysis": {
+      "default_agent": "antigravity",
+      "estimated_minutes": 10,
+      "requires_tests": false
+    },
+    "code_generation": {
+      "default_agent": "codex",
+      "estimated_minutes": 8,
+      "requires_tests": true
+    },
+    "architecture": {
+      "default_agent": "claude",
+      "estimated_minutes": 20,
+      "requires_tests": false
+    }
+  },
+  "handoff_memory": {
+    "current_orchestrator": "claude",
+    "last_handoff": null,
+    "handoff_history": [],
+    "context_to_preserve": []
+  }
+}

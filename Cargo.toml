@@ -1,0 +1,93 @@
+[package]
+name = "palm-oil-bot"
+version = "0.1.0"
+edition = "2021"
+authors = ["Palm Oil Trading Team"]
+description = "Automated trading bot for Palm Oil CFDs (FCPO) using RSI and sentiment analysis"
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full", "sync", "time", "net", "io-util", "macros", "rt-multi-thread"] }
+
+# HTTP client for Perplexity API
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Date/time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Environment variables
+dotenvy = "0.15"
+
+# Logging with tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Protobuf for cTrader API
+prost = "0.12"
+prost-types = "0.12"
+bytes = "1.5"
+
+# TCP/TLS for cTrader connection
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+tokio-native-tls = "0.3"
+native-tls = "0.2"
+
+# HTML parsing for Twitter scraping backup
+scraper = "0.18"
+select = "0.6"
+
+# Technical indicators (RSI)
+ta = "0.5"
+
+# CLI Dashboard
+ratatui = "0.25"
+crossterm = "0.27"
+
+# Configuration
+config = "0.14"
+
+# Async channels
+async-channel = "2.1"
+
+# URL parsing
+url = "2.5"
+
+# Regex for sentiment parsing
+regex = "1.10"
+
+# Random number generation (for backtesting)
+rand = "0.8"
+
+[build-dependencies]
+prost-build = "0.12"
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.12"
+
+[[bin]]
+name = "palm-oil-bot"
+path = "src/main.rs"
+
+[[bin]]
+name = "test-connection"
+path = "src/bin/test_connection.rs"
+
+[[bin]]
+name = "backtest"
+path = "src/bin/backtest.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
