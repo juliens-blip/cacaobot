@@ -66,6 +66,10 @@ regex = "1.10"
 
 # Random number generation (for backtesting)
 rand = "0.8"
+rand_chacha = "0.3"
+
+# X.509 parsing for TLS certificate validation
+x509-parser = "0.16"
 
 [build-dependencies]
 prost-build = "0.12"
@@ -73,6 +77,10 @@ prost-build = "0.12"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.12"
+tempfile = "3.10"
+tokio-rustls = "0.25"
+rustls = "0.22"
+rustls-native-certs = "0.7"
 
 [[bin]]
 name = "palm-oil-bot"
@@ -85,6 +93,14 @@ path = "src/bin/test_connection.rs"
 [[bin]]
 name = "backtest"
 path = "src/bin/backtest.rs"
+
+[[bin]]
+name = "optimize"
+path = "src/bin/optimize.rs"
+
+[[bin]]
+name = "test-tls-connection"
+path = "src/bin/test_tls_connection.rs"
 
 [profile.release]
 opt-level = 3
