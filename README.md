@@ -2,7 +2,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-62%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-114%20passing-brightgreen.svg)](#testing)
 
 Automated trading bot for **FCPO (Crude Palm Oil Futures)** CFDs on Fusion Markets via cTrader Open API.
 
@@ -34,7 +34,8 @@ Automated trading bot for **FCPO (Crude Palm Oil Futures)** CFDs on Fusion Marke
 - **Dual-signal strategy engine** combining RSI and sentiment for buy/sell decisions
 - **Technical indicators**: RSI, EMA, MACD, Bollinger Bands, ATR
 - **Order & position management**: position lifecycle, P&L, trailing stops, TP/SL handling
-- **Risk controls**: max positions, risk-based sizing, daily loss circuit breaker, cooldowns after losses
+- **Risk controls**: Circuit breakers (daily loss -5%, consecutive losses, volatility spikes), max positions, risk-based sizing, cooldowns after losses
+- **Advanced features**: Event system (MPSC channels), candle aggregation (M1/M5/M15/H1), real-time market data pipeline
 - **Sentiment analysis**: Perplexity API client + Twitter parsing fallback with score normalization
 - **Monitoring & analytics**: CLI dashboard, trade metrics, risk metrics (win rate, drawdown, Sharpe/Sortino, VaR)
 - **Backtesting binary** for strategy validation on synthetic/historical data
@@ -536,3 +537,4 @@ Contributions welcome! Please:
 <p align="center">
   <sub>Made with ❤️ by the Palm Oil Trading Team</sub>
 </p>
+# cacaobot
