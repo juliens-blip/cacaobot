@@ -1026,3 +1026,9 @@ Ou bien une demande directe qui déclenchera automatiquement le workflow complet
 ---
 
 **Workflow APEX (v2026) - Initialisé et prêt.**
+
+
+## Skills recommandes
+
+- `agent-patterns` — formats SPAWN/REPORT pour orchestration
+- `prompt-optimizer` — clarification/exigences avant execution

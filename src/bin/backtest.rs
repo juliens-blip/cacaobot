@@ -2,12 +2,25 @@
 //!
 //! Simulates trading strategy on historical or synthetic price data.
 //! Calculates performance metrics: win rate, total P&L, max drawdown, Sharpe ratio.
+//!
+//! ## Usage
+//! ```bash
+//! # Normal mode (1.5% volatility)
+//! cargo run --bin backtest
+//!
+//! # Stress mode (5% volatility with losing streaks)
+//! cargo run --bin backtest -- --stress
+//! ```
 
 use chrono::{DateTime, Utc};
 use palm_oil_bot::config::Config;
 use palm_oil_bot::modules::trading::{
-    indicators::RsiCalculator, orders::OrderSide, strategy::TradingStrategy,
+    circuit_breakers::{CircuitBreakerConfig, CircuitBreakers},
+    indicators::RsiCalculator,
+    orders::OrderSide,
+    strategy::TradingStrategy,
 };
+use std::env;
 use tracing::{info, warn};
 
 const INITIAL_BALANCE: f64 = 10000.0;
@@ -22,8 +35,31 @@ struct Candle {
     close: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BacktestMode {
+    Normal,
+    Stress,
+}
+
+impl BacktestMode {
+    fn volatility(&self) -> f64 {
+        match self {
+            BacktestMode::Normal => 1.5,
+            BacktestMode::Stress => 5.0,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            BacktestMode::Normal => "NORMAL",
+            BacktestMode::Stress => "STRESS",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct BacktestResult {
+    mode: BacktestMode,
     total_trades: u32,
     winning_trades: u32,
     losing_trades: u32,
@@ -33,12 +69,24 @@ struct BacktestResult {
     avg_win: f64,
     avg_loss: f64,
     final_balance: f64,
+    circuit_breaker_triggers: CircuitBreakerTriggers,
+}
+
+#[derive(Debug, Default)]
+struct CircuitBreakerTriggers {
+    daily_loss_triggers: u32,
+    consecutive_loss_triggers: u32,
+    volatility_triggers: u32,
+    trades_blocked: u32,
 }
 
 impl BacktestResult {
     fn print_report(&self) {
+        let mode_emoji = if self.mode == BacktestMode::Stress { "🔥" } else { "📊" };
+        
         println!("\n╔══════════════════════════════════════════════════════════╗");
-        println!("║          🌴 BACKTEST RESULTS - PALM OIL BOT 🌴           ║");
+        println!("║   {} BACKTEST RESULTS - {} MODE {}                    ║", 
+            mode_emoji, self.mode.name(), mode_emoji);
         println!("╠══════════════════════════════════════════════════════════╣");
         println!("║ PERFORMANCE METRICS                                      ║");
         println!("╠══════════════════════════════════════════════════════════╣");
@@ -71,6 +119,24 @@ impl BacktestResult {
             let profit_factor = self.avg_win / self.avg_loss.abs();
             println!("║ Profit Factor      : {:.2}", profit_factor);
         }
+
+        println!("╠══════════════════════════════════════════════════════════╣");
+        println!("║ CIRCUIT BREAKER REPORT                                   ║");
+        println!("╠══════════════════════════════════════════════════════════╣");
+        println!("║ Daily Loss Triggers    : {}", self.circuit_breaker_triggers.daily_loss_triggers);
+        println!("║ Consecutive Loss Triggers : {}", self.circuit_breaker_triggers.consecutive_loss_triggers);
+        println!("║ Volatility Triggers    : {}", self.circuit_breaker_triggers.volatility_triggers);
+        println!("║ Trades Blocked         : {}", self.circuit_breaker_triggers.trades_blocked);
+        
+        let total_triggers = self.circuit_breaker_triggers.daily_loss_triggers
+            + self.circuit_breaker_triggers.consecutive_loss_triggers
+            + self.circuit_breaker_triggers.volatility_triggers;
+        
+        if total_triggers > 0 {
+            println!("║ 🛡️ Circuit breakers protected capital {} time(s)", total_triggers);
+        } else {
+            println!("║ ✅ No circuit breakers triggered");
+        }
         
         println!("╚══════════════════════════════════════════════════════════╝\n");
     }
@@ -99,7 +165,7 @@ fn generate_price_data(num_candles: usize, start_price: f64, volatility: f64) ->
         });
         
         current_price = new_price;
-        timestamp = timestamp + chrono::Duration::hours(1);
+        timestamp += chrono::Duration::hours(1);
     }
 
     candles
@@ -123,7 +189,7 @@ fn simulate_sentiment(rsi: f64, volatility_factor: f64) -> i32 {
     sentiment.clamp(-100, 100)
 }
 
-fn run_backtest(candles: &[Candle]) -> BacktestResult {
+fn run_backtest(candles: &[Candle], mode: BacktestMode) -> BacktestResult {
     let config = Config::default();
     let trading_config = config.trading.clone();
     let mut strategy = TradingStrategy::new(
@@ -131,6 +197,10 @@ fn run_backtest(candles: &[Candle]) -> BacktestResult {
         trading_config.clone(),
         INITIAL_BALANCE,
     );
+    
+    let cb_config = CircuitBreakerConfig::default();
+    let mut circuit_breakers = CircuitBreakers::new(cb_config);
+    let mut cb_triggers = CircuitBreakerTriggers::default();
     
     let mut rsi_calc = RsiCalculator::new(14);
     let mut balance = INITIAL_BALANCE;
@@ -143,17 +213,39 @@ fn run_backtest(candles: &[Candle]) -> BacktestResult {
     let mut total_wins = 0.0;
     let mut total_losses = 0.0;
     
+    let mut atr_values: Vec<f64> = Vec::new();
+    
     let mut current_position: Option<(String, OrderSide, f64, f64)> = None;
     
-    info!("Starting backtest with {} candles", candles.len());
+    info!("Starting backtest in {} mode with {} candles", mode.name(), candles.len());
     
     for (idx, candle) in candles.iter().enumerate() {
         let price = candle.close;
         
+        // Calculate ATR-like value for volatility check
+        let atr = candle.high - candle.low;
+        atr_values.push(atr);
+        let avg_atr = if atr_values.len() >= 14 {
+            atr_values.iter().rev().take(14).sum::<f64>() / 14.0
+        } else {
+            atr
+        };
+        
+        // Check volatility circuit breaker
+        if circuit_breakers.check_volatility(atr, avg_atr) {
+            cb_triggers.volatility_triggers += 1;
+        }
+        
+        // Check daily loss circuit breaker
+        let daily_pnl_pct = (balance - INITIAL_BALANCE) / INITIAL_BALANCE;
+        if circuit_breakers.check_daily_loss(daily_pnl_pct) {
+            cb_triggers.daily_loss_triggers += 1;
+        }
+        
         let rsi_opt = rsi_calc.add_price(price);
         
         if let Some(rsi) = rsi_opt {
-            let sentiment = simulate_sentiment(rsi, 0.5);
+            let sentiment = simulate_sentiment(rsi, if mode == BacktestMode::Stress { 1.5 } else { 0.5 });
             
             if let Some((_pos_id, side, entry_price, volume)) = current_position.take() {
                 let pnl = match side {
@@ -180,9 +272,16 @@ fn run_backtest(candles: &[Candle]) -> BacktestResult {
                     if pnl > 0.0 {
                         winning_trades += 1;
                         total_wins += pnl;
+                        circuit_breakers.record_trade_result(true);
                     } else {
                         losing_trades += 1;
                         total_losses += pnl.abs();
+                        circuit_breakers.record_trade_result(false);
+                        
+                        // Check if consecutive loss breaker was triggered
+                        if circuit_breakers.get_consecutive_losses() >= 3 && !circuit_breakers.is_trading_allowed() {
+                            cb_triggers.consecutive_loss_triggers += 1;
+                        }
                     }
                     
                     info!(
@@ -204,6 +303,12 @@ fn run_backtest(candles: &[Candle]) -> BacktestResult {
             }
             
             if current_position.is_none() {
+                // Check if circuit breakers allow trading
+                if !circuit_breakers.is_trading_allowed() {
+                    cb_triggers.trades_blocked += 1;
+                    continue;
+                }
+                
                 let signal = strategy.generate_signal(rsi, sentiment);
                 
                 if signal != palm_oil_bot::modules::trading::strategy::Signal::Hold {
@@ -272,6 +377,7 @@ fn run_backtest(candles: &[Candle]) -> BacktestResult {
     };
     
     BacktestResult {
+        mode,
         total_trades,
         winning_trades,
         losing_trades,
@@ -281,7 +387,48 @@ fn run_backtest(candles: &[Candle]) -> BacktestResult {
         avg_win,
         avg_loss,
         final_balance: balance,
+        circuit_breaker_triggers: cb_triggers,
     }
+}
+
+fn generate_stress_price_data(num_candles: usize, start_price: f64) -> Vec<Candle> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let mut candles = Vec::with_capacity(num_candles);
+    let mut current_price = start_price;
+    let mut timestamp = Utc::now() - chrono::Duration::hours(num_candles as i64);
+
+    for i in 0..num_candles {
+        // Inject losing streaks and high volatility periods
+        let volatility = if i % 50 < 10 {
+            // Every 50 candles, 10 candles of high volatility
+            8.0
+        } else if i % 100 < 20 {
+            // Every 100 candles, 20 candles of downtrend
+            -3.0 + rng.gen_range(-2.0..1.0)
+        } else {
+            rng.gen_range(-5.0..5.0)
+        };
+
+        let change = volatility;
+        let new_price = current_price * (1.0 + change / 100.0);
+        
+        let high = current_price.max(new_price) * (1.0 + rng.gen_range(0.0..1.0) / 100.0);
+        let low = current_price.min(new_price) * (1.0 - rng.gen_range(0.0..1.0) / 100.0);
+        
+        candles.push(Candle {
+            timestamp,
+            open: current_price,
+            high,
+            low,
+            close: new_price,
+        });
+        
+        current_price = new_price;
+        timestamp += chrono::Duration::hours(1);
+    }
+
+    candles
 }
 
 fn main() {
@@ -289,13 +436,24 @@ fn main() {
         .with_env_filter("backtest=info,palm_oil_bot=warn")
         .init();
 
+    let args: Vec<String> = env::args().collect();
+    let mode = if args.iter().any(|a| a == "--stress") {
+        BacktestMode::Stress
+    } else {
+        BacktestMode::Normal
+    };
+
     println!("\n🌴 Palm Oil Trading Bot - Backtesting Engine 🌴\n");
+    println!("Mode: {} (volatility: {}%)\n", mode.name(), mode.volatility());
     
     info!("Generating synthetic price data...");
-    let candles = generate_price_data(1000, 4850.0, 1.5);
+    let candles = match mode {
+        BacktestMode::Normal => generate_price_data(1000, 4850.0, mode.volatility()),
+        BacktestMode::Stress => generate_stress_price_data(1000, 4850.0),
+    };
     
     info!("Running backtest simulation...");
-    let result = run_backtest(&candles);
+    let result = run_backtest(&candles, mode);
     
     result.print_report();
     
@@ -303,5 +461,23 @@ fn main() {
         println!("✅ Strategy shows positive results!");
     } else {
         println!("⚠️  Strategy needs optimization.");
+    }
+    
+    // Summary for stress mode
+    if mode == BacktestMode::Stress {
+        let total_cb = result.circuit_breaker_triggers.daily_loss_triggers
+            + result.circuit_breaker_triggers.consecutive_loss_triggers
+            + result.circuit_breaker_triggers.volatility_triggers;
+        
+        if total_cb > 0 {
+            println!("\n🛡️ STRESS TEST VALIDATION:");
+            println!("   Circuit breakers successfully triggered {} time(s)", total_cb);
+            println!("   {} trades were blocked, protecting capital", result.circuit_breaker_triggers.trades_blocked);
+            println!("   ✅ Capital protection mechanisms working correctly\n");
+        } else {
+            println!("\n⚠️ STRESS TEST WARNING:");
+            println!("   No circuit breakers triggered during stress test");
+            println!("   Consider if thresholds need adjustment\n");
+        }
     }
 }

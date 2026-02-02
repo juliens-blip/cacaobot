@@ -27,6 +27,10 @@ pub enum BotError {
     #[error("Strategy error: {0}")]
     Strategy(String),
 
+    /// Trading errors
+    #[error("Trading error: {0}")]
+    Trading(String),
+
     /// Network errors
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
@@ -43,6 +47,7 @@ pub enum BotError {
     #[error("{0}")]
     Other(String),
 }
+
 
 /// cTrader specific errors
 #[derive(Debug, Error)]
@@ -67,6 +72,9 @@ pub enum CTraderError {
 
     #[error("Protocol error: {0}")]
     Protocol(String),
+
+    #[error("API error: {0}")]
+    ApiError(String),
 }
 
 /// Perplexity API specific errors

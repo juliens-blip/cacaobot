@@ -158,7 +158,7 @@ impl RsiCalculator {
 
     /// Check if we have enough data for RSI calculation
     pub fn is_ready(&self) -> bool {
-        self.prices.len() >= self.period + 1
+        self.prices.len() > self.period
     }
 
     /// Get the number of prices stored
@@ -439,7 +439,7 @@ mod tests {
 
         assert!(last_rsi.is_some());
         let rsi_value = last_rsi.unwrap();
-        assert!(rsi_value >= 0.0 && rsi_value <= 100.0);
+        assert!((0.0..=100.0).contains(&rsi_value));
         println!("RSI: {:.2}", rsi_value);
     }
 

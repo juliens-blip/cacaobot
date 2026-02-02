@@ -259,3 +259,11 @@ Pour chaque demande, je fournis:
 
 *Agent Controle v1.0 - Meta-orchestrateur*
 *Maintenu par Claude Opus 4.5*
+
+
+## Skills recommandes
+
+- `agent-comms` — communication inter-agents via tmux
+- `agent-patterns` — protocoles de coordination multi-agents
+- `agent-mail` — inbox/outbox + reservations de fichiers
+- `agent-swarm-workflow` — execution parallele structuree

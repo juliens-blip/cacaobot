@@ -498,3 +498,9 @@ Ne pose PAS de questions. Commence l'analyse directement et retourne le rapport 
 ---
 
 **Prêt à analyser le style. Quelle partie du site veux-tu que j'explore ?**
+
+
+## Skills recommandes
+
+- `design-critique` — critique UI/UX actionnable
+- `ui-ux-expert` — principes UX + accessibilite WCAG

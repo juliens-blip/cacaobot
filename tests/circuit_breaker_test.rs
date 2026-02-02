@@ -188,6 +188,7 @@ fn create_test_strategy() -> TradingStrategy {
         take_profit_percent: 2.0,
         stop_loss_percent: 1.5,
         max_daily_loss_percent: 5.0,
+        initial_balance: 10000.0,
     };
 
     TradingStrategy::new(strategy_config, trading_config, 10000.0)

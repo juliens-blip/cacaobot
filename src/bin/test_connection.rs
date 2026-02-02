@@ -8,7 +8,6 @@ use palm_oil_bot::config::Config;
 use palm_oil_bot::modules::trading::{CTraderClient, OrderTicket};
 use palm_oil_bot::modules::trading::protobuf::ProtoOATradeSide;
 use tracing::{error, info};
-use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

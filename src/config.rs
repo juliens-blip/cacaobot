@@ -17,14 +17,125 @@ pub struct Config {
     pub bot: BotConfig,
 }
 
+/// Trading environment (DEMO or LIVE)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TradingEnvironment {
+    #[default]
+    Demo,
+    Live,
+}
+
+impl TradingEnvironment {
+    /// Get the server endpoint for this environment
+    pub fn server_endpoint(&self) -> &'static str {
+        match self {
+            Self::Demo => "demo.ctraderapi.com",
+            Self::Live => "live.ctraderapi.com",
+        }
+    }
+
+    /// Check if this is live trading
+    pub fn is_live(&self) -> bool {
+        matches!(self, Self::Live)
+    }
+}
+
+impl std::str::FromStr for TradingEnvironment {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "live" | "production" | "prod" => Self::Live,
+            _ => Self::Demo,
+        })
+    }
+}
+
+impl std::fmt::Display for TradingEnvironment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Demo => write!(f, "demo"),
+            Self::Live => write!(f, "live"),
+        }
+    }
+}
+
 /// cTrader API configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct CTraderConfig {
+    /// Current trading environment
+    pub environment: TradingEnvironment,
+    /// Demo client ID
     pub client_id: String,
+    /// Demo client secret
     pub client_secret: String,
+    /// Demo account ID
     pub account_id: String,
+    /// OAuth access token (required for both DEMO and LIVE)
+    pub access_token: Option<String>,
+    /// Server hostname (auto-set based on environment)
     pub server: String,
+    /// Server port
     pub port: u16,
+    /// Live production credentials (optional)
+    pub client_id_live: Option<String>,
+    pub client_secret_live: Option<String>,
+    pub account_id_live: Option<String>,
+}
+
+impl CTraderConfig {
+    /// Load cTrader configuration from environment variables
+    pub fn from_env() -> Result<Self> {
+        dotenvy::dotenv().ok();
+
+        Ok(CTraderConfig {
+            environment: get_env_or("CTRADER_ENVIRONMENT", "demo")
+                .parse()
+                .unwrap_or_default(),
+            client_id: get_env("CTRADER_CLIENT_ID")?,
+            client_secret: get_env("CTRADER_CLIENT_SECRET")?,
+            account_id: get_env("CTRADER_ACCOUNT_ID")?,
+            access_token: env::var("CTRADER_ACCESS_TOKEN").ok(),
+            server: get_env_or("CTRADER_SERVER", "demo.ctraderapi.com"),
+            port: get_env_or("CTRADER_PORT", "5035").parse().unwrap_or(5035),
+            client_id_live: env::var("CTRADER_CLIENT_ID_LIVE").ok(),
+            client_secret_live: env::var("CTRADER_CLIENT_SECRET_LIVE").ok(),
+            account_id_live: env::var("CTRADER_ACCOUNT_ID_LIVE").ok(),
+        })
+    }
+
+    /// Get the active client ID based on environment
+    pub fn active_client_id(&self) -> &str {
+        if self.environment.is_live() {
+            self.client_id_live.as_deref().unwrap_or(&self.client_id)
+        } else {
+            &self.client_id
+        }
+    }
+
+    /// Get the active client secret based on environment
+    pub fn active_client_secret(&self) -> &str {
+        if self.environment.is_live() {
+            self.client_secret_live.as_deref().unwrap_or(&self.client_secret)
+        } else {
+            &self.client_secret
+        }
+    }
+
+    /// Get the active account ID based on environment
+    pub fn active_account_id(&self) -> &str {
+        if self.environment.is_live() {
+            self.account_id_live.as_deref().unwrap_or(&self.account_id)
+        } else {
+            &self.account_id
+        }
+    }
+
+    /// Get the active server endpoint based on environment
+    pub fn active_server(&self) -> &str {
+        self.environment.server_endpoint()
+    }
 }
 
 /// Perplexity API configuration
@@ -44,6 +155,7 @@ pub struct TradingConfig {
     pub stop_loss_percent: f64,
     pub max_positions: usize,
     pub max_daily_loss_percent: f64,
+    pub initial_balance: f64,
 }
 
 /// Strategy parameters
@@ -72,11 +184,18 @@ impl Config {
 
         let config = Config {
             ctrader: CTraderConfig {
+                environment: get_env_or("CTRADER_ENVIRONMENT", "demo")
+                    .parse()
+                    .unwrap_or_default(),
                 client_id: get_env("CTRADER_CLIENT_ID")?,
                 client_secret: get_env("CTRADER_CLIENT_SECRET")?,
                 account_id: get_env("CTRADER_ACCOUNT_ID")?,
+                access_token: env::var("CTRADER_ACCESS_TOKEN").ok(),
                 server: get_env_or("CTRADER_SERVER", "demo.ctraderapi.com"),
                 port: get_env_or("CTRADER_PORT", "5035").parse().unwrap_or(5035),
+                client_id_live: env::var("CTRADER_CLIENT_ID_LIVE").ok(),
+                client_secret_live: env::var("CTRADER_CLIENT_SECRET_LIVE").ok(),
+                account_id_live: env::var("CTRADER_ACCOUNT_ID_LIVE").ok(),
             },
             perplexity: PerplexityConfig {
                 api_key: get_env("PERPLEXITY_API_KEY")?,
@@ -99,6 +218,9 @@ impl Config {
                 max_daily_loss_percent: get_env_or("MAX_DAILY_LOSS_PERCENT", "5.0")
                     .parse()
                     .unwrap_or(5.0),
+                initial_balance: get_env_or("INITIAL_BALANCE", "10000.0")
+                    .parse()
+                    .unwrap_or(10000.0),
             },
             strategy: StrategyConfig {
                 rsi_period: get_env_or("RSI_PERIOD", "14").parse().unwrap_or(14),
@@ -136,6 +258,29 @@ impl Config {
         if self.ctrader.client_secret.is_empty() {
             return Err(BotError::Config("CTRADER_CLIENT_SECRET is required".into()));
         }
+        if self.ctrader.account_id.is_empty() {
+            return Err(BotError::Config("CTRADER_ACCOUNT_ID is required".into()));
+        }
+        if self.ctrader.access_token.as_deref().unwrap_or("").is_empty() {
+            if self.bot.dry_run {
+                tracing::warn!("CTRADER_ACCESS_TOKEN not set — running in offline dry-run mode");
+            } else {
+                return Err(BotError::Config(
+                    "CTRADER_ACCESS_TOKEN is required. Run `cargo run --bin get-token` to obtain one.".into(),
+                ));
+            }
+        }
+        if self.ctrader.environment.is_live() {
+            if self.ctrader.client_id_live.as_deref().unwrap_or("").is_empty() {
+                return Err(BotError::Config("CTRADER_CLIENT_ID_LIVE is required for LIVE trading".into()));
+            }
+            if self.ctrader.client_secret_live.as_deref().unwrap_or("").is_empty() {
+                return Err(BotError::Config("CTRADER_CLIENT_SECRET_LIVE is required for LIVE trading".into()));
+            }
+            if self.ctrader.account_id_live.as_deref().unwrap_or("").is_empty() {
+                return Err(BotError::Config("CTRADER_ACCOUNT_ID_LIVE is required for LIVE trading".into()));
+            }
+        }
         if self.perplexity.api_key.is_empty() {
             return Err(BotError::Config("PERPLEXITY_API_KEY is required".into()));
         }
@@ -156,11 +301,16 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             ctrader: CTraderConfig {
+                environment: TradingEnvironment::Demo,
                 client_id: String::new(),
                 client_secret: String::new(),
                 account_id: "0".to_string(),
+                access_token: None,
                 server: "demo.ctraderapi.com".to_string(),
                 port: 5035,
+                client_id_live: None,
+                client_secret_live: None,
+                account_id_live: None,
             },
             perplexity: PerplexityConfig {
                 api_key: String::new(),
@@ -174,6 +324,7 @@ impl Default for Config {
                 stop_loss_percent: 1.5,
                 max_positions: 1,
                 max_daily_loss_percent: 5.0,
+                initial_balance: 10000.0,
             },
             strategy: StrategyConfig {
                 rsi_period: 14,
@@ -208,16 +359,25 @@ fn get_env_or(key: &str, default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_config_validation() {
         let config = Config {
             ctrader: CTraderConfig {
+                environment: TradingEnvironment::Demo,
                 client_id: "test".into(),
                 client_secret: "test".into(),
                 account_id: "123".into(),
+                access_token: Some("test-token".into()),
                 server: "demo.ctraderapi.com".into(),
                 port: 5035,
+                client_id_live: None,
+                client_secret_live: None,
+                account_id_live: None,
             },
             perplexity: PerplexityConfig {
                 api_key: "test-key".into(),
@@ -231,6 +391,7 @@ mod tests {
                 stop_loss_percent: 1.5,
                 max_positions: 1,
                 max_daily_loss_percent: 5.0,
+                initial_balance: 10000.0,
             },
             strategy: StrategyConfig {
                 rsi_period: 14,
@@ -248,5 +409,28 @@ mod tests {
         };
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_ctrader_config_from_env_reads_access_token() {
+        let _lock = ENV_LOCK.lock().expect("env lock");
+        env::set_var("CTRADER_CLIENT_ID", "client_id");
+        env::set_var("CTRADER_CLIENT_SECRET", "client_secret");
+        env::set_var("CTRADER_ACCOUNT_ID", "account_id");
+        env::set_var("CTRADER_ACCESS_TOKEN", "demo_access_token");
+
+        let config = CTraderConfig::from_env().expect("ctrader config");
+        assert_eq!(config.access_token.as_deref(), Some("demo_access_token"));
+
+        env::remove_var("CTRADER_CLIENT_ID");
+        env::remove_var("CTRADER_CLIENT_SECRET");
+        env::remove_var("CTRADER_ACCOUNT_ID");
+        env::remove_var("CTRADER_ACCESS_TOKEN");
+    }
+
+    #[test]
+    fn test_ctrader_access_token_default_is_none() {
+        let config = Config::default();
+        assert!(config.ctrader.access_token.is_none());
     }
 }

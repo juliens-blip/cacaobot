@@ -1,38 +1,63 @@
-# CODEX TASK - Palm Oil Bot - URGENT FIX
+# CODEX TASK - Palm Oil Bot
 
-**Date**: 2026-01-21 13:05
-**Priority**: CRITICAL
+**Date**: 2026-01-21 18:30
+**Priority**: HIGH
 **Status**: ASSIGNED
 
----
+## Task: TASK-CODEX-003 - Create Bot Main Loop
 
-## TASK: Fix Compilation Errors (Blocking)
+Créer le fichier principal du bot avec la boucle de trading.
 
-Le projet a une erreur de compilation bloquante à corriger IMMÉDIATEMENT.
+### Fichier à créer: `src/bot.rs`
 
-### Erreur dans `src/modules/trading/ctrader.rs` ligne 415
+### Fonctionnalités requises:
 
-**Code actuel (ERREUR):**
 ```rust
-self.handle_spot_event(spot_event).await;
+pub struct TradingBot {
+    strategy: TradingStrategy,
+    ctrader: CTraderClient,
+    candle_builder: CandleBuilder,
+    rsi_calculator: RsiCalculator,
+    event_channel: EventChannelHandle,
+}
+
+impl TradingBot {
+    pub fn new(config: Config) -> Result<Self>;
+    
+    /// Main trading loop
+    pub async fn run(&mut self) -> Result<()>;
+    
+    /// Process a single tick
+    async fn process_tick(&mut self, tick: Tick) -> Result<()>;
+    
+    /// Check for position exits
+    async fn check_exits(&mut self) -> Result<()>;
+    
+    /// Generate and execute signals
+    async fn process_signal(&mut self, candle: &Candle) -> Result<()>;
+}
 ```
 
-**Code corrigé:**
+### Logique principale:
+1. Connecter à cTrader
+2. Boucle infinie avec cycle_interval_secs:
+   - Récupérer prix actuel
+   - Agréger en bougies (CandleBuilder)
+   - Quand bougie complète → calculer RSI
+   - Générer signal (TradingStrategy)
+   - Vérifier exits (TP/SL)
+   - Exécuter ordres si circuit breakers OK
+3. Gérer les événements (EventChannel)
+
+### Intégration:
+Modifier `src/lib.rs`:
 ```rust
-Self::handle_spot_event(spot_event, &self.prices).await;
+pub mod bot;
+pub use bot::TradingBot;
 ```
 
-### Actions:
-
-1. Ouvrir `/home/julien/Documents/palm-oil-bot/src/modules/trading/ctrader.rs`
-2. Aller à la ligne 415
-3. Remplacer l'appel par la version corrigée
-4. Vérifier: `cd /home/julien/Documents/palm-oil-bot && cargo check`
-
-### Validation:
-- [ ] `cargo check` = 0 erreurs
-- [ ] `cargo test` passe
+### Tests:
+Créer `tests/bot_integration_test.rs` avec dry_run mode
 
 ---
-
-**Execute maintenant.**
+**Assigned by**: AMP Orchestrator

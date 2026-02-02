@@ -166,7 +166,7 @@ impl CandleInProgress {
         self.volume += 1;
     }
 
-    fn to_candle(self, timeframe: TimeFrame) -> Candle {
+    fn into_candle(self, timeframe: TimeFrame) -> Candle {
         Candle {
             timestamp: self.timestamp,
             timeframe,
@@ -207,7 +207,7 @@ impl CandleBuilder {
                     None
                 } else {
                     // New candle period started, complete the current one
-                    let completed = candle.clone().to_candle(self.timeframe);
+                    let completed = candle.clone().into_candle(self.timeframe);
                     self.current_candle = Some(CandleInProgress::new(candle_start, tick.price));
                     Some(completed)
                 }
@@ -219,12 +219,12 @@ impl CandleBuilder {
     pub fn flush(&mut self) -> Option<Candle> {
         self.current_candle
             .take()
-            .map(|candle| candle.to_candle(self.timeframe))
+            .map(|candle| candle.into_candle(self.timeframe))
     }
 
-    /// Get reference to current candle in progress
-    pub fn current(&self) -> Option<&CandleInProgress> {
-        self.current_candle.as_ref()
+    /// Check if a candle is currently being built
+    pub fn has_current(&self) -> bool {
+        self.current_candle.is_some()
     }
 
     /// Get timeframe
@@ -270,7 +270,7 @@ mod tests {
         assert!(result.is_none()); // No candle completed yet
         
         // Current candle should exist
-        assert!(builder.current().is_some());
+        assert!(builder.has_current());
     }
 
     #[test]
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(candle.close, 105.0);
         
         // After flush, no current candle
-        assert!(builder.current().is_none());
+        assert!(!builder.has_current());
     }
 
     #[test]

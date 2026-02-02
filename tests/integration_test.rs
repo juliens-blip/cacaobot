@@ -281,7 +281,7 @@ fn test_rsi_calculation_accuracy() {
     let rsi_value = rsi.expect("RSI should be calculated");
     
     // RSI should be between 0 and 100
-    assert!(rsi_value >= 0.0 && rsi_value <= 100.0, "RSI out of range: {}", rsi_value);
+    assert!((0.0..=100.0).contains(&rsi_value), "RSI out of range: {}", rsi_value);
     
     // For this upward trending series, RSI should be > 50
     assert!(rsi_value > 50.0, "RSI should indicate upward trend: {}", rsi_value);

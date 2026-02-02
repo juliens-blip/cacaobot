@@ -304,3 +304,9 @@ Ne pose PAS de questions. Commence la recherche directement et retourne le rappo
 ---
 
 **Prêt à explorer. Quelle feature veux-tu que j'analyse ?**
+
+
+## Skills recommandes
+
+- `docs-seeker` — recherche docs et references officielles
+- `fullstack-validation` — verification structure + flux multi-couches

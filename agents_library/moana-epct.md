@@ -264,3 +264,9 @@ npm run dev
 ---
 
 **Pret a developper des fonctionnalites de qualite pour Moana Yachting !**
+
+
+## Skills recommandes
+
+- `prompt-optimizer` — structuration des exigences vagues
+- `prompt-optimizer` — structuration des exigences + prompts efficaces

@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Palm Oil Trading Team"]
 description = "Automated trading bot for Palm Oil CFDs (FCPO) using RSI and sentiment analysis"
 license = "MIT"
+default-run = "palm-oil-bot"
 
 [dependencies]
 # Async runtime
@@ -12,6 +13,7 @@ tokio = { version = "1.35", features = ["full", "sync", "time", "net", "io-util"
 
 # HTTP client for Perplexity API
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+hyper = { version = "0.14", features = ["full"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -40,6 +42,9 @@ bytes = "1.5"
 tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
+tokio-rustls = "0.25"
+rustls = "0.22"
+rustls-native-certs = "0.7"
 
 # HTML parsing for Twitter scraping backup
 scraper = "0.18"
@@ -58,6 +63,10 @@ config = "0.14"
 # Async channels
 async-channel = "2.1"
 
+# Metrics export
+prometheus = "0.13"
+axum = "0.6"
+
 # URL parsing
 url = "2.5"
 
@@ -71,6 +80,13 @@ rand_chacha = "0.3"
 # X.509 parsing for TLS certificate validation
 x509-parser = "0.16"
 
+# SQLite for persistence (lightweight, no external server)
+rusqlite = { version = "0.31", features = ["bundled"] }
+urlencoding = "2.1.3"
+
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
+
 [build-dependencies]
 prost-build = "0.12"
 
@@ -78,9 +94,6 @@ prost-build = "0.12"
 tokio-test = "0.4"
 mockall = "0.12"
 tempfile = "3.10"
-tokio-rustls = "0.25"
-rustls = "0.22"
-rustls-native-certs = "0.7"
 
 [[bin]]
 name = "palm-oil-bot"
@@ -99,8 +112,20 @@ name = "optimize"
 path = "src/bin/optimize.rs"
 
 [[bin]]
+name = "export-trades"
+path = "src/bin/export_trades.rs"
+
+[[bin]]
+name = "backtest-optimizer"
+path = "src/bin/backtest_optimizer.rs"
+
+[[bin]]
 name = "test-tls-connection"
 path = "src/bin/test_tls_connection.rs"
+
+[[bin]]
+name = "get-token"
+path = "src/bin/get_token.rs"
 
 [profile.release]
 opt-level = 3

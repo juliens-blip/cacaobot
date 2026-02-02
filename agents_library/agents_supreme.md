@@ -537,3 +537,11 @@ Pour taches complexes, combiner:
 *Catalogue maintenu par Claude Opus 4.5*
 *Version: 1.1 - 2026-01-02*
 *Total: 26 agents*
+
+
+## Skills recommandes
+
+- `agent-comms` — communication inter-agents via tmux
+- `agent-patterns` — protocoles de coordination multi-agents
+- `agent-mail` — inbox/outbox + reservations de fichiers
+- `agent-swarm-workflow` — execution parallele structuree

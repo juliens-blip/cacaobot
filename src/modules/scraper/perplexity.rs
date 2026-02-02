@@ -1,19 +1,52 @@
 //! Perplexity API client for real-time sentiment analysis
 //!
 //! Uses the Perplexity Sonar model to search the web for current market sentiment.
+//! Includes in-memory caching with TTL to avoid rate limits and reduce API costs.
 
 use crate::config::PerplexityConfig;
 use crate::error::{BotError, PerplexityError, Result};
 use crate::modules::scraper::sentiment::{SentimentAnalyzer, SentimentResult};
+use crate::modules::scraper::sentiment_cache::SentimentCache;
+use crate::modules::security::ApiRateLimiter;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-/// Perplexity API client
+/// Build a market sentiment prompt dynamically based on the trading symbol
+fn build_sentiment_prompt(symbol: &str) -> String {
+    format!(
+        r#"Analyze the current market sentiment for {symbol} commodity futures.
+
+Search for:
+1. Latest price movements and technical levels for {symbol}
+2. Supply/demand data, inventory reports, export/import flows
+3. Weather, geopolitical events, or regulations affecting {symbol}
+4. Trader positioning (COT report), social media sentiment, analyst forecasts
+5. Correlated markets and macro factors (USD, crude oil, interest rates)
+
+Be aggressive in your assessment. Even small edges matter. If there is ANY directional bias, amplify it.
+
+Based on your analysis, provide:
+1. A sentiment score from -100 (extremely bearish) to +100 (extremely bullish). Do NOT default to 0. Take a stance.
+2. Key factors driving the sentiment
+3. Confidence level (low/medium/high)
+
+Format your response as:
+SENTIMENT_SCORE: [number]
+CONFIDENCE: [low/medium/high]
+SUMMARY: [brief explanation]"#
+    )
+}
+
+/// Perplexity API client with caching
 pub struct PerplexityClient {
     client: reqwest::Client,
     config: PerplexityConfig,
     sentiment_analyzer: SentimentAnalyzer,
+    cache: SentimentCache,
+    rate_limiter: Arc<ApiRateLimiter>,
+    symbol: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,8 +87,20 @@ struct Usage {
 }
 
 impl PerplexityClient {
-    /// Create a new Perplexity API client
-    pub fn new(config: PerplexityConfig) -> Self {
+    /// Create a new Perplexity API client with default cache (5 min TTL)
+    pub fn new(config: PerplexityConfig, rate_limiter: Arc<ApiRateLimiter>) -> Self {
+        Self::with_cache(config, SentimentCache::new(), rate_limiter)
+    }
+
+    /// Create a new Perplexity API client with symbol and default cache
+    pub fn with_symbol(config: PerplexityConfig, rate_limiter: Arc<ApiRateLimiter>, symbol: &str) -> Self {
+        let mut client = Self::with_cache(config, SentimentCache::new(), rate_limiter);
+        client.symbol = symbol.to_string();
+        client
+    }
+
+    /// Create a new Perplexity API client with custom cache
+    pub fn with_cache(config: PerplexityConfig, cache: SentimentCache, rate_limiter: Arc<ApiRateLimiter>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -68,45 +113,57 @@ impl PerplexityClient {
             client,
             config,
             sentiment_analyzer: SentimentAnalyzer::new(),
+            cache,
+            rate_limiter,
+            symbol: "SUGARRAW".to_string(),
         }
     }
 
-    /// Query Perplexity for current palm oil market sentiment
+    /// Get cached sentiment or fetch from API if cache miss/expired
+    pub async fn get_cached_sentiment(&self) -> Result<SentimentResult> {
+        let prompt = build_sentiment_prompt(&self.symbol);
+        if let Some(score) = self.cache.get(&prompt) {
+            info!("Using cached sentiment for {} (score: {})", self.symbol, score);
+            return Ok(SentimentResult::new(score, "perplexity_cache"));
+        }
+
+        info!("Cache miss - fetching fresh sentiment for {} from Perplexity API", self.symbol);
+        let result = self.get_market_sentiment_uncached().await?;
+        self.cache.set(&prompt, result.score);
+        Ok(result)
+    }
+
+    /// Query Perplexity for current market sentiment (bypasses cache)
     pub async fn get_market_sentiment(&self) -> Result<SentimentResult> {
-        let prompt = r#"Analyze the current market sentiment for FCPO (Crude Palm Oil Futures) and Malaysian palm oil market.
+        self.get_cached_sentiment().await
+    }
 
-Search for:
-1. Recent news about palm oil prices
-2. Export/import data
-3. Weather conditions affecting production
-4. Government policies
-5. Social media sentiment from traders
-
-Based on your analysis, provide:
-1. A sentiment score from -100 (extremely bearish) to +100 (extremely bullish)
-2. Key factors driving the sentiment
-3. Confidence level (low/medium/high)
-
-Format your response as:
-SENTIMENT_SCORE: [number]
-CONFIDENCE: [low/medium/high]
-SUMMARY: [brief explanation]"#;
-
-        let response = self.query(prompt).await?;
+    /// Direct API call without cache (for testing or force refresh)
+    pub async fn get_market_sentiment_uncached(&self) -> Result<SentimentResult> {
+        let prompt = build_sentiment_prompt(&self.symbol);
+        let response = self.query(&prompt).await?;
         self.parse_sentiment_response(&response)
     }
 
     /// Query Perplexity with a custom prompt
     pub async fn query(&self, prompt: &str) -> Result<String> {
-        let system_prompt = "You are a commodities market analyst specializing in palm oil futures (FCPO). \
-            Provide concise, data-driven analysis. Always include a numerical sentiment score.";
+        // Wait for rate limit before making request
+        self.rate_limiter.wait_for_rate_limit().await;
+
+        let system_prompt = format!(
+            "You are an aggressive commodities trader specializing in {}. \
+            You look for short-term momentum plays and take decisive positions. \
+            Provide concise, data-driven analysis. Always include a numerical sentiment score. \
+            Never sit on the fence - if there's any edge, take a strong directional view.",
+            self.symbol
+        );
 
         let request = ChatRequest {
             model: self.config.model.clone(),
             messages: vec![
                 Message {
                     role: "system".to_string(),
-                    content: system_prompt.to_string(),
+                    content: system_prompt.clone(),
                 },
                 Message {
                     role: "user".to_string(),
@@ -134,7 +191,8 @@ SUMMARY: [brief explanation]"#;
 
         let status = response.status();
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            warn!("Perplexity API rate limited");
+            warn!("Perplexity API rate limited (429)");
+            self.rate_limiter.record_failure().await;
             return Err(BotError::Perplexity(PerplexityError::RateLimited));
         }
 
@@ -146,10 +204,14 @@ SUMMARY: [brief explanation]"#;
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
             error!("Perplexity API error: {} - {}", status, error_text);
+            self.rate_limiter.record_failure().await;
             return Err(BotError::Perplexity(PerplexityError::RequestFailed(
                 format!("{}: {}", status, error_text),
             )));
         }
+
+        // Record success for successful responses
+        self.rate_limiter.record_success().await;
 
         let chat_response: ChatResponse = response.json().await.map_err(|e| {
             error!("Failed to parse Perplexity response: {}", e);
@@ -219,20 +281,34 @@ SUMMARY: [brief explanation]"#;
 
         Ok(result)
     }
+
+    /// Get reference to the cache
+    pub fn cache(&self) -> &SentimentCache {
+        &self.cache
+    }
+
+    /// Clear the cache (useful for testing or force refresh)
+    pub fn clear_cache(&self) {
+        self.cache.clear();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_sentiment_bullish() {
-        let config = PerplexityConfig {
+    fn test_config() -> PerplexityConfig {
+        PerplexityConfig {
             api_key: "test".to_string(),
             endpoint: "https://api.perplexity.ai".to_string(),
             model: "sonar".to_string(),
-        };
-        let client = PerplexityClient::new(config);
+        }
+    }
+
+    #[test]
+    fn test_parse_sentiment_bullish() {
+        let rate_limiter = Arc::new(ApiRateLimiter::for_perplexity());
+        let client = PerplexityClient::new(test_config(), rate_limiter);
 
         let response = "SENTIMENT_SCORE: 65\nCONFIDENCE: high\nSUMMARY: Strong bullish outlook";
         let result = client.parse_sentiment_response(response).unwrap();
@@ -243,16 +319,21 @@ mod tests {
 
     #[test]
     fn test_parse_sentiment_bearish() {
-        let config = PerplexityConfig {
-            api_key: "test".to_string(),
-            endpoint: "https://api.perplexity.ai".to_string(),
-            model: "sonar".to_string(),
-        };
-        let client = PerplexityClient::new(config);
+        let rate_limiter = Arc::new(ApiRateLimiter::for_perplexity());
+        let client = PerplexityClient::new(test_config(), rate_limiter);
 
         let response = "SENTIMENT_SCORE: -40\nCONFIDENCE: medium\nSUMMARY: Bearish due to oversupply";
         let result = client.parse_sentiment_response(response).unwrap();
 
         assert_eq!(result.score, -40);
+    }
+
+    #[test]
+    fn test_client_with_custom_cache() {
+        let cache = SentimentCache::new();
+        let rate_limiter = Arc::new(ApiRateLimiter::for_perplexity());
+        let client = PerplexityClient::with_cache(test_config(), cache, rate_limiter);
+
+        assert_eq!(client.cache().get(&build_sentiment_prompt("SUGARRAW")), None);
     }
 }

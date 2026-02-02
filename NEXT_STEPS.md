@@ -1,118 +1,69 @@
-# 📋 Next Steps - Palm Oil Bot
+# Next Steps - Production Deployment Recommendations
 
-**Dernière mise à jour**: 2026-01-20 12:42
-**Status**: Orchestration autonome active
-
----
-
-## ✅ Tâches Complétées
-
-### AMP Worker (Moi-même)
-- ✅ **TASK-COMPLEX-1**: Continuous cTrader reader + price storage
-- ✅ **TASK-COMPLEX-2**: Return position_id from execution events
-- ✅ **TASK-AMP-001**: Enhanced indicators (EMA, MACD, Bollinger, ATR)
-
-**Total**: 360+ lignes de code, 8 tests unitaires
+**Last updated**: 2026-01-26
+**Scope**: Palm Oil Bot production readiness
 
 ---
 
-## 🔄 Tâches En Cours
+## 1) Security Hardening
 
-### Antigravity (Window 4)
-- 🔄 **TASK-APEX-002**: Real-Time Market Data Pipeline
-  - event_system.rs (MPSC channels)
-  - candles.rs (tick-to-candle aggregation)
-  - orderbook.rs (order book reconstruction)
+- **Secrets management**: Move API keys and cTrader credentials to a secret manager (Railway/VM secrets), remove `.env` from runtime, and ensure logs never print secrets.
+- **TLS enforcement**: Ensure cTrader connections use TLS (rustls) with verified certificates for both LIVE and DEMO.
+- **Credential rotation**: Define rotation cadence for Perplexity and cTrader credentials; add automated reminders.
+- **Network boundaries**: Restrict outbound calls to required endpoints (cTrader, Perplexity, Nitter). Use allow-lists.
+- **Rate limiting**: Add backoff + jitter for Perplexity and Twitter scraping to avoid bans and reduce costs.
 
-### Codex (Window 2)
-- 🔄 **TASK-CODEX-002**: Error handling tests
-  - tests/error_handling_test.rs
-  - Integration tests pour network/API failures
+## 2) Monitoring & Alerting
 
----
+- **Structured logs**: Ensure logs include timestamps, trade IDs, symbol IDs, and request IDs.
+- **Metrics export**: Expose Prometheus-style metrics (P&L, win rate, drawdown, circuit breaker triggers, cache hit rate).
+- **Health checks**: Add liveness/readiness endpoints or periodic heartbeat logs for process supervision.
+- **Alerting**: Configure alerts for:
+  - cTrader disconnects / auth failures
+  - Order rejections
+  - Sudden drawdown or consecutive losses
+  - Perplexity rate limits and Twitter fallback usage
 
-## ⏳ Tâches Suivantes (Queue)
+## 3) Required Tests Before Production
 
-### AMP (Moi-même) - Priorité Haute
-1. **TASK-AMP-002**: Circuit Breakers
-   - Daily loss limit
-   - Consecutive losses breaker
-   - Volatility spike detector
-   - Fichier: `src/modules/trading/circuit_breakers.rs`
+- **Unit**:
+  - Strategy signals (RSI + sentiment boundaries)
+  - Risk/circuit breaker thresholds
+  - Sentiment cache TTL and eviction
+- **Integration**:
+  - cTrader demo connection + auth + subscribe flow
+  - Perplexity API happy path + 429 handling
+  - Twitter fallback path
+- **Regression**:
+  - Backtest optimizer CSV generation
+  - Strategy config parameter bounds
+- **Manual**:
+  - End-to-end demo run (dry_run=false but no real orders)
 
-2. **TASK-AMP-003**: Risk Metrics
-   - Sharpe Ratio
-   - Sortino Ratio
-   - Max Drawdown
-   - Value at Risk (VaR)
-   - Fichier: `src/modules/monitoring/risk_metrics.rs`
+## 4) Deployment Checklist
 
-### Antigravity - Priorité Moyenne
-3. **TASK-APEX-003**: Advanced Risk Management System
-4. **TASK-APEX-004**: Backtesting Framework Evolution
-5. **TASK-APEX-005**: Intelligent Trade Execution
+- **Build**: `cargo build --release`
+- **Runtime config**: Validate all required env vars are present and parsed correctly.
+- **Dry-run gate**: Keep `DRY_RUN=true` for first live smoke test.
+- **Rollback plan**: Prepare a one-command rollback (previous image/tag).
+- **Post-deploy validation**:
+  - Confirm market data feed updates
+  - Confirm sentiment pipeline runs
+  - Confirm orders are blocked in dry-run
 
-### Codex - Priorité Basse
-6. **TASK-CODEX-003**: Performance profiling
-7. **TASK-CODEX-004**: Documentation generation
+## 5) Production Readiness Gaps
 
----
-
-## 📊 Progression Globale
-
-| Module | Completion |
-|--------|-----------|
-| Core (main, config, error) | ✅ 100% |
-| Trading (ctrader, strategy, indicators) | ✅ 95% |
-| Scraper (perplexity, twitter, sentiment) | ✅ 90% |
-| Monitoring (dashboard, metrics) | ✅ 85% |
-| Advanced Trading (events, candles, orderbook) | 🔄 20% |
-| Risk Management (circuit breakers, metrics) | ⏳ 0% |
-| Backtesting | ✅ 70% |
-| Deployment | ✅ 100% |
-
-**Overall**: ~75% complet
+- **Socket concurrency**: Ensure single-reader pattern for cTrader socket to avoid framing corruption.
+- **Reconciliation**: Implement position reconciliation at startup and after reconnect.
+- **Persistence**: Persist positions and trades to durable storage (SQLite/Postgres) for audit and recovery.
+- **Observability**: Add dashboards for latency, order fill rate, and error distribution.
 
 ---
 
-## 🎯 Objectifs Prochaines 2 Heures
+## Suggested Priority Order
 
-1. ✅ Antigravity termine TASK-APEX-002 → 3 nouveaux fichiers
-2. ✅ Codex termine tests error handling
-3. ✅ AMP implémente Circuit Breakers (TASK-AMP-002)
-4. ✅ AMP implémente Risk Metrics (TASK-AMP-003)
-
-**Livrable attendu**: +500 lignes de code production-ready
-
----
-
-## 🚀 Déploiement Final
-
-**Quand ready:**
-```bash
-# 1. Tests complets
-cargo test
-
-# 2. Build release
-cargo build --release
-
-# 3. Docker image
-docker build -t palm-oil-bot .
-
-# 4. Deploy Railway
-railway up
-```
-
-**Critères de déploiement:**
-- ✅ Tous les tests passent
-- ✅ 0 erreurs de compilation
-- ✅ Circuit breakers implémentés
-- ✅ Backtest avec profit factor > 1.5
-- ✅ README complet
-
-**ETA Déploiement**: 2-3 heures restantes
-
----
-
-**Mode**: AUTONOME
-**Surveillance**: Active (monitoring scripts en background)
+1. Security hardening (TLS + secrets)
+2. cTrader socket correctness + reconciliation
+3. Monitoring + alerts
+4. Integration tests (demo environment)
+5. Production dry-run

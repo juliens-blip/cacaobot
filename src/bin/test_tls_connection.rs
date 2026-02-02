@@ -1,189 +1,144 @@
-//! TLS certificate validation test for cTrader API endpoints.
+//! Test TLS certificate validation for cTrader endpoints.
 //!
 //! Usage: cargo run --bin test-tls-connection
 
-use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
-use native_tls::TlsConnector as NativeTlsConnector;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use rustls::ClientConfig;
+use rustls::RootCertStore;
+use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
-use tokio::time::{timeout, Duration};
-use tokio_native_tls::TlsConnector;
-use x509_parser::extensions::GeneralName;
-use x509_parser::prelude::{ParsedExtension, X509Certificate};
+use tokio::time::timeout;
+use tokio_rustls::TlsConnector;
+use x509_parser::prelude::{FromDer, X509Certificate};
 
-#[derive(Debug, Clone)]
-struct CertInfo {
-    subject: String,
-    issuer: String,
-    not_before: DateTime<Utc>,
-    not_after: DateTime<Utc>,
-    sans: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-struct TlsResult {
-    host: String,
+#[derive(Debug, Clone, Copy)]
+struct Target {
+    host: &'static str,
     port: u16,
-    cert: CertInfo,
-    valid_now: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let targets = [
-        ("live.ctraderapi.com", 5035),
-        ("demo.ctraderapi.com", 5035),
+        Target {
+            host: "live.ctraderapi.com",
+            port: 5035,
+        },
+        Target {
+            host: "demo.ctraderapi.com",
+            port: 5035,
+        },
     ];
 
-    println!("=== TLS Certificate Validation (cTrader) ===");
-
-    let mut results = Vec::new();
-    for (host, port) in targets {
-        println!("\n[TEST] {host}:{port}");
-        match fetch_certificate(host, port).await {
-            Ok(result) => {
-                print_result(&result);
-                results.push(result);
-            }
-            Err(err) => {
-                println!("TLS handshake failed: {err}");
-            }
-        }
+    for target in targets {
+        println!("\n=== TLS Validation: {}:{} ===", target.host, target.port);
+        test_target(target).await?;
     }
 
-    if results.len() == 2 {
-        println!("\n=== Differences (LIVE vs DEMO) ===");
-        print_differences(&results[0], &results[1]);
-    } else {
-        println!("\nNot enough results to compare certificates.");
+    println!("\nAll TLS checks completed successfully.");
+    Ok(())
+}
+
+async fn test_target(target: Target) -> Result<()> {
+    let address = format!("{}:{}", target.host, target.port);
+    let tcp_stream = timeout(Duration::from_secs(10), TcpStream::connect(&address))
+        .await
+        .with_context(|| format!("TCP connect timeout for {}", address))?
+        .with_context(|| format!("TCP connect failed for {}", address))?;
+
+    let tls_config = Arc::new(build_tls_config()?);
+    let connector = TlsConnector::from(tls_config);
+
+    let server_name = ServerName::try_from(target.host.to_string())
+        .with_context(|| format!("Invalid DNS name: {}", target.host))?;
+
+    let tls_stream = timeout(Duration::from_secs(10), connector.connect(server_name, tcp_stream))
+        .await
+        .with_context(|| format!("TLS handshake timeout for {}", address))?
+        .with_context(|| format!("TLS handshake failed for {}", address))?;
+
+    let (_, session) = tls_stream.get_ref();
+    let protocol = session
+        .protocol_version()
+        .map(|v| format!("{:?}", v))
+        .unwrap_or_else(|| "unknown".to_string());
+    let cipher_suite = session
+        .negotiated_cipher_suite()
+        .map(|cs| format!("{:?}", cs))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    println!("TLS handshake: OK");
+    println!("Protocol: {}", protocol);
+    println!("Cipher suite: {}", cipher_suite);
+
+    let certs = session
+        .peer_certificates()
+        .map(|certs| certs.to_vec())
+        .unwrap_or_default();
+
+    if certs.is_empty() {
+        bail!("No peer certificates presented by {}", target.host);
     }
+
+    let leaf = &certs[0];
+    print_certificate_details(leaf)?;
 
     Ok(())
 }
 
-async fn fetch_certificate(host: &str, port: u16) -> Result<TlsResult> {
-    let addr = format!("{host}:{port}");
-    let tcp = timeout(Duration::from_secs(10), TcpStream::connect(&addr))
-        .await
-        .context("tcp connect timeout")?
-        .context("tcp connect failed")?;
+fn build_tls_config() -> Result<ClientConfig> {
+    let mut root_store = RootCertStore::empty();
+    let native_certs = rustls_native_certs::load_native_certs()
+        .context("Failed to load native root certificates")?;
 
-    let connector = NativeTlsConnector::builder()
-        .build()
-        .context("failed to build TLS connector")?;
-    let connector = TlsConnector::from(connector);
-
-    let tls = timeout(Duration::from_secs(10), connector.connect(host, tcp))
-        .await
-        .context("TLS handshake timeout")?
-        .context("TLS handshake failed")?;
-
-    let peer_cert = tls
-        .get_ref()
-        .peer_certificate()
-        .context("failed to read peer certificate")?
-        .ok_or_else(|| anyhow!("no peer certificate presented"))?;
-
-    let der = peer_cert.to_der().context("failed to serialize cert")?;
-    let (_, cert) = X509Certificate::from_der(&der).map_err(|e| anyhow!("x509 parse error: {e}"))?;
-    let cert_info = extract_cert_info(&cert)?;
-
-    let now = Utc::now();
-    let valid_now = now >= cert_info.not_before && now <= cert_info.not_after;
-
-    Ok(TlsResult {
-        host: host.to_string(),
-        port,
-        cert: cert_info,
-        valid_now,
-    })
-}
-
-fn extract_cert_info(cert: &X509Certificate<'_>) -> Result<CertInfo> {
-    let subject = cert.subject().to_string();
-    let issuer = cert.issuer().to_string();
-    let not_before = cert
-        .validity()
-        .not_before
-        .to_datetime()
-        .context("invalid not_before")?;
-    let not_after = cert
-        .validity()
-        .not_after
-        .to_datetime()
-        .context("invalid not_after")?;
-
-    let mut sans = Vec::new();
-    for ext in cert.extensions() {
-        if let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension() {
-            for name in &san.general_names {
-                if let GeneralName::DNSName(dns) = name {
-                    sans.push(dns.to_string());
-                }
-            }
+    let mut added = 0usize;
+    for cert in native_certs {
+        if root_store.add(cert).is_ok() {
+            added += 1;
         }
     }
-    sans.sort();
-    sans.dedup();
 
-    Ok(CertInfo {
-        subject,
-        issuer,
-        not_before,
-        not_after,
-        sans,
-    })
+    if added == 0 {
+        bail!("No native root certificates were added");
+    }
+
+    let config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    Ok(config)
 }
 
-fn print_result(result: &TlsResult) {
-    println!("TLS handshake: OK");
-    println!("Certificate subject: {}", result.cert.subject);
-    println!("Certificate issuer: {}", result.cert.issuer);
-    println!("Validity: {} -> {}", result.cert.not_before, result.cert.not_after);
-    if result.cert.sans.is_empty() {
-        println!("SANs: (none)");
-    } else {
-        println!("SANs: {}", result.cert.sans.join(", "));
-    }
-    println!("Valid now: {}", if result.valid_now { "YES" } else { "NO" });
-}
+fn print_certificate_details(cert_der: &rustls::pki_types::CertificateDer<'_>) -> Result<()> {
+    let (_, cert) = X509Certificate::from_der(cert_der.as_ref())
+        .context("Failed to parse leaf certificate")?;
 
-fn print_differences(a: &TlsResult, b: &TlsResult) {
-    let mut diffs = Vec::new();
+    let subject = cert.subject();
+    let issuer = cert.issuer();
+    let validity = cert.validity();
 
-    if a.cert.subject != b.cert.subject {
-        diffs.push(format!("Subject differs:\n  LIVE: {}\n  DEMO: {}", a.cert.subject, b.cert.subject));
-    }
-    if a.cert.issuer != b.cert.issuer {
-        diffs.push(format!("Issuer differs:\n  LIVE: {}\n  DEMO: {}", a.cert.issuer, b.cert.issuer));
-    }
-    if a.cert.not_before != b.cert.not_before || a.cert.not_after != b.cert.not_after {
-        diffs.push(format!(
-            "Validity differs:\n  LIVE: {} -> {}\n  DEMO: {} -> {}",
-            a.cert.not_before, a.cert.not_after, b.cert.not_before, b.cert.not_after
-        ));
-    }
-    if a.cert.sans != b.cert.sans {
-        diffs.push(format!(
-            "SANs differ:\n  LIVE: {}\n  DEMO: {}",
-            if a.cert.sans.is_empty() {
-                "(none)".to_string()
-            } else {
-                a.cert.sans.join(", ")
-            },
-            if b.cert.sans.is_empty() {
-                "(none)".to_string()
-            } else {
-                b.cert.sans.join(", ")
+    println!("Certificate subject: {}", subject);
+    println!("Certificate issuer: {}", issuer);
+    println!(
+        "Validity: {} -> {}",
+        validity.not_before.to_datetime(),
+        validity.not_after.to_datetime()
+    );
+
+    if let Ok(Some(names)) = cert.subject_alternative_name() {
+        let mut dns_names = Vec::new();
+        for name in &names.value.general_names {
+            if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
+                dns_names.push(dns.to_string());
             }
-        ));
-    }
-
-    if diffs.is_empty() {
-        println!("No certificate differences detected.");
-    } else {
-        for diff in diffs {
-            println!("{diff}");
+        }
+        if !dns_names.is_empty() {
+            println!("SANs: {}", dns_names.join(", "));
         }
     }
+
+    Ok(())
 }

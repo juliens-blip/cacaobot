@@ -257,3 +257,9 @@ When creating MCP integrations, always:
 - Provide clear setup and usage instructions
 
 If you encounter requirements outside MCP integration scope, clearly state the limitation and suggest appropriate resources or alternative approaches.
+
+## Skills recommandes
+
+- `agent-mail` — coordination + reservations fichiers
+- `agent-patterns` — protocoles inter-agents
+- `agent-swarm-workflow` — execution parallele structuree

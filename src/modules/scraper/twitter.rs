@@ -5,7 +5,9 @@
 
 use crate::error::{BotError, Result};
 use crate::modules::scraper::sentiment::{SentimentAnalyzer, SentimentResult};
+use crate::modules::security::ApiRateLimiter;
 use scraper::{Html, Selector};
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Tweet data structure
@@ -21,11 +23,12 @@ pub struct TwitterScraper {
     client: reqwest::Client,
     kols: Vec<String>,
     sentiment_analyzer: SentimentAnalyzer,
+    rate_limiter: Arc<ApiRateLimiter>,
 }
 
 impl TwitterScraper {
     /// Create a new Twitter scraper
-    pub fn new(kols: Vec<String>) -> Self {
+    pub fn new(kols: Vec<String>, rate_limiter: Arc<ApiRateLimiter>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -39,6 +42,7 @@ impl TwitterScraper {
             client,
             kols,
             sentiment_analyzer: SentimentAnalyzer::new(),
+            rate_limiter,
         }
     }
 
@@ -66,6 +70,9 @@ impl TwitterScraper {
         // Note: Twitter guest scraping is unreliable and may be blocked
         // This is a backup method when Perplexity is rate limited
 
+        // Wait for rate limit before making request
+        self.rate_limiter.wait_for_rate_limit().await;
+
         let url = format!("https://nitter.net/{}", username);
         debug!("Scraping tweets from: {}", url);
 
@@ -77,11 +84,16 @@ impl TwitterScraper {
             .map_err(|e| BotError::Twitter(format!("Request failed: {}", e)))?;
 
         if !response.status().is_success() {
+            warn!("Twitter scrape failed: {}", response.status());
+            self.rate_limiter.record_failure().await;
             return Err(BotError::Twitter(format!(
                 "HTTP error: {}",
                 response.status()
             )));
         }
+
+        // Record success
+        self.rate_limiter.record_success().await;
 
         let html = response
             .text()
@@ -148,7 +160,8 @@ mod tests {
 
     #[test]
     fn test_parse_empty_tweets() {
-        let scraper = TwitterScraper::new(vec!["test".to_string()]);
+        let rate_limiter = Arc::new(ApiRateLimiter::for_twitter());
+        let scraper = TwitterScraper::new(vec!["test".to_string()], rate_limiter);
         let html = "<html><body></body></html>";
         let tweets = scraper.parse_tweets(html, "test").unwrap();
         assert!(tweets.is_empty());

@@ -19,23 +19,27 @@ RUN apt-get update && apt-get install -y \
 # Copy manifests first for dependency caching
 COPY Cargo.toml Cargo.lock* ./
 
+# Copy proto files and build.rs first (needed for prost-build)
+COPY proto ./proto
+COPY build.rs ./build.rs
+
 # Create dummy source structure for dependency caching
 RUN mkdir -p src/modules/scraper src/modules/trading src/modules/monitoring src/modules/utils src/bin \
     && echo "fn main() { println!(\"dummy\"); }" > src/main.rs \
     && echo "fn main() {}" > src/bin/test_connection.rs \
     && echo "fn main() {}" > src/bin/backtest.rs \
-    && touch src/lib.rs src/config.rs src/error.rs \
+    && touch src/lib.rs src/config.rs src/error.rs src/bot.rs \
     && echo "pub mod scraper; pub mod trading; pub mod monitoring; pub mod utils;" > src/modules/mod.rs \
     && touch src/modules/scraper/mod.rs src/modules/trading/mod.rs \
     && touch src/modules/monitoring/mod.rs src/modules/utils/mod.rs
 
 # Build dependencies only (cached layer)
 RUN cargo build --release 2>/dev/null || true
-RUN rm -rf src
+RUN rm -rf src build.rs
 
 # Copy actual source code
+COPY build.rs ./build.rs
 COPY src ./src
-COPY proto ./proto 2>/dev/null || true
 
 # Build the application
 RUN cargo build --release --bin palm-oil-bot

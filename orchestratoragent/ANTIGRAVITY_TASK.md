@@ -1,195 +1,106 @@
-# ANTIGRAVITY TASK - Risk Metrics Module
+# ANTIGRAVITY TASK - Palm Oil Bot
 
-**Date**: 2026-01-21 13:05
-**Priority**: HIGH
+**Date**: 2026-01-21 18:36
+**Priority**: HAUTE
 **Status**: ASSIGNED
 
----
+## Task: TASK-ANTIGRAVITY-001 - Sentiment Integration
 
-## TASK: Implement Risk Metrics (TASK-AMP-003)
+Intégrer le système de sentiment analysis dans la génération de signaux de trading.
 
-Créer le module complet de métriques de risque.
+### Objectif
 
-### Fichier à créer: `src/modules/monitoring/risk_metrics.rs`
+Le bot doit utiliser le sentiment en temps réel (Perplexity API) pour confirmer les signaux RSI.
+
+### Fichiers à modifier
+
+1. **src/modules/scraper/sentiment.rs** (déjà existe)
+2. **src/bot.rs** (créé par Codex - attendre)
+3. **src/modules/trading/strategy.rs** (update)
+
+### Implémentation
+
+#### 1. Créer fonction fetch_sentiment() dans bot.rs
 
 ```rust
-//! Risk metrics module for portfolio analysis
-//! Provides Sharpe, Sortino, Max Drawdown, VaR calculations
+async fn fetch_current_sentiment(&self) -> Result<i32> {
+    let perplexity = PerplexityClient::new(self.config.perplexity_api_key.clone());
+    
+    let query = format!(
+        "Latest palm oil (FCPO) market sentiment. News, prices, supply/demand. Current date: {}",
+        Utc::now().format("%Y-%m-%d")
+    );
+    
+    let response = perplexity.query(&query).await?;
+    let analyzer = SentimentAnalyzer::new();
+    
+    Ok(analyzer.analyze(&response))
+}
+```
 
-use std::collections::VecDeque;
+#### 2. Intégrer dans process_signal()
 
-const TRADING_DAYS: f64 = 252.0;
+```rust
+async fn process_signal(&mut self, candle: &Candle) -> Result<()> {
+    // Calculer RSI
+    let rsi = self.rsi_calculator.current_rsi().unwrap_or(50.0);
+    
+    // Fetch sentiment temps réel
+    let sentiment = self.fetch_current_sentiment().await?;
+    
+    // Générer signal combiné
+    let signal = self.strategy.generate_signal(rsi, sentiment);
+    
+    match signal {
+        Signal::Buy => self.execute_buy().await?,
+        Signal::Sell => self.execute_sell().await?,
+        Signal::Hold => {}
+    }
+    
+    Ok(())
+}
+```
 
-/// Risk metrics calculator
-pub struct RiskMetrics {
-    returns: VecDeque<f64>,
-    max_size: usize,
-    risk_free_rate: f64,
-    peak_value: f64,
-    current_drawdown: f64,
-    max_drawdown: f64,
+#### 3. Ajouter cache pour éviter trop d'API calls
+
+```rust
+struct SentimentCache {
+    value: i32,
+    timestamp: DateTime<Utc>,
+    ttl: Duration,
 }
 
-impl RiskMetrics {
-    pub fn new(risk_free_rate: f64) -> Self {
-        Self {
-            returns: VecDeque::with_capacity(252),
-            max_size: 252,
-            risk_free_rate,
-            peak_value: 0.0,
-            current_drawdown: 0.0,
-            max_drawdown: 0.0,
-        }
-    }
-
-    pub fn add_return(&mut self, daily_return: f64) {
-        if self.returns.len() >= self.max_size {
-            self.returns.pop_front();
-        }
-        self.returns.push_back(daily_return);
-    }
-
-    pub fn update_drawdown(&mut self, portfolio_value: f64) {
-        if portfolio_value > self.peak_value {
-            self.peak_value = portfolio_value;
-            self.current_drawdown = 0.0;
-        } else {
-            self.current_drawdown = (self.peak_value - portfolio_value) / self.peak_value;
-            if self.current_drawdown > self.max_drawdown {
-                self.max_drawdown = self.current_drawdown;
-            }
-        }
-    }
-
-    /// Sharpe Ratio = (Mean Return - Risk Free Rate) / Std Dev * sqrt(252)
-    pub fn sharpe_ratio(&self) -> Option<f64> {
-        if self.returns.len() < 30 {
-            return None;
-        }
-        let mean = self.mean_return();
-        let std = self.std_deviation()?;
-        if std == 0.0 {
-            return None;
-        }
-        let daily_rf = self.risk_free_rate / TRADING_DAYS;
-        Some((mean - daily_rf) / std * TRADING_DAYS.sqrt())
-    }
-
-    /// Sortino Ratio - only uses downside deviation
-    pub fn sortino_ratio(&self) -> Option<f64> {
-        if self.returns.len() < 30 {
-            return None;
-        }
-        let mean = self.mean_return();
-        let downside_std = self.downside_deviation()?;
-        if downside_std == 0.0 {
-            return None;
-        }
-        let daily_rf = self.risk_free_rate / TRADING_DAYS;
-        Some((mean - daily_rf) / downside_std * TRADING_DAYS.sqrt())
-    }
-
-    /// Maximum Drawdown
-    pub fn max_drawdown(&self) -> f64 {
-        self.max_drawdown
-    }
-
-    /// Value at Risk (95% confidence)
-    pub fn var_95(&self) -> Option<f64> {
-        if self.returns.len() < 30 {
-            return None;
-        }
-        let mean = self.mean_return();
-        let std = self.std_deviation()?;
-        Some(mean - 1.645 * std)
-    }
-
-    fn mean_return(&self) -> f64 {
-        if self.returns.is_empty() {
-            return 0.0;
-        }
-        self.returns.iter().sum::<f64>() / self.returns.len() as f64
-    }
-
-    fn std_deviation(&self) -> Option<f64> {
-        if self.returns.len() < 2 {
-            return None;
-        }
-        let mean = self.mean_return();
-        let variance = self.returns.iter()
-            .map(|r| (r - mean).powi(2))
-            .sum::<f64>() / (self.returns.len() - 1) as f64;
-        Some(variance.sqrt())
-    }
-
-    fn downside_deviation(&self) -> Option<f64> {
-        if self.returns.len() < 2 {
-            return None;
-        }
-        let negative_returns: Vec<f64> = self.returns.iter()
-            .filter(|&&r| r < 0.0)
-            .copied()
-            .collect();
-        if negative_returns.is_empty() {
-            return Some(0.0);
-        }
-        let mean_neg = negative_returns.iter().sum::<f64>() / negative_returns.len() as f64;
-        let variance = negative_returns.iter()
-            .map(|r| (r - mean_neg).powi(2))
-            .sum::<f64>() / negative_returns.len() as f64;
-        Some(variance.sqrt())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sharpe_ratio() {
-        let mut metrics = RiskMetrics::new(0.05);
-        for i in 0..50 {
-            metrics.add_return(0.001 + (i % 3) as f64 * 0.0005);
-        }
-        let sharpe = metrics.sharpe_ratio();
-        assert!(sharpe.is_some());
-        assert!(sharpe.unwrap() > 0.0);
-    }
-
-    #[test]
-    fn test_max_drawdown() {
-        let mut metrics = RiskMetrics::new(0.05);
-        metrics.update_drawdown(100.0);
-        metrics.update_drawdown(110.0);
-        metrics.update_drawdown(95.0);
-        assert!(metrics.max_drawdown() > 0.13);
-    }
-
-    #[test]
-    fn test_var_95() {
-        let mut metrics = RiskMetrics::new(0.05);
-        for _ in 0..50 {
-            metrics.add_return(0.001);
-        }
-        let var = metrics.var_95();
-        assert!(var.is_some());
+impl SentimentCache {
+    fn is_valid(&self) -> bool {
+        Utc::now() - self.timestamp < self.ttl
     }
 }
 ```
 
-### Intégration dans mod.rs:
+**Cache refresh**: 5 minutes (éviter rate limits Perplexity)
 
-Ajouter dans `/home/julien/Documents/palm-oil-bot/src/modules/monitoring/mod.rs`:
-```rust
-pub mod risk_metrics;
-pub use risk_metrics::RiskMetrics;
-```
+### Tests
 
-### Validation:
-- [ ] Fichier créé
-- [ ] Tests passent: `cargo test risk_metrics`
-- [ ] Intégré dans mod.rs
+Créer `tests/sentiment_integration_test.rs`:
+- Test cache TTL
+- Test fallback si API échoue
+- Test signal generation avec sentiment
+
+### Acceptance Criteria
+
+- [x] fetch_current_sentiment() implémenté
+- [x] Cache 5min pour éviter rate limits
+- [x] Sentiment intégré dans generate_signal()
+- [x] Fallback gracieux si API fail (utiliser sentiment=0 neutre)
+- [x] Logs montrant sentiment score
+
+### Notes
+
+- Perplexity API key dans `.env`: `PERPLEXITY_API_KEY`
+- Rate limit: 50 req/min gratuit
+- Avec cache 5min: ~288 req/jour (OK)
 
 ---
-
-**Execute maintenant.**
+**Assigned by**: AMP Orchestrator
+**ETA**: 15 minutes
+**Next**: Attendre bot.rs de Codex, puis intégrer

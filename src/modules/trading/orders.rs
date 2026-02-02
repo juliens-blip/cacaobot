@@ -308,10 +308,7 @@ impl Position {
     /// Update trailing stop with current price
     /// Returns Some(stop_price) if trailing stop is triggered
     pub fn update_trailing_stop(&mut self, current_price: f64) -> Option<f64> {
-        let config = match self.trailing_config {
-            Some(c) => c,
-            None => return None,
-        };
+        let config = self.trailing_config?;
 
         let pnl_percent = self.calculate_pnl_percent(current_price);
 
@@ -332,7 +329,7 @@ impl Position {
                     let new_stop = self.highest_price * (1.0 - config.trail_percent / 100.0);
 
                     // Only move stop up, never down
-                    if self.trailing_stop_price.map_or(true, |stop| new_stop > stop) {
+                    if self.trailing_stop_price.is_none_or(|stop| new_stop > stop) {
                         self.trailing_stop_price = Some(new_stop);
                     }
 
@@ -360,7 +357,7 @@ impl Position {
                     let new_stop = self.lowest_price * (1.0 + config.trail_percent / 100.0);
 
                     // Only move stop down, never up
-                    if self.trailing_stop_price.map_or(true, |stop| new_stop < stop) {
+                    if self.trailing_stop_price.is_none_or(|stop| new_stop < stop) {
                         self.trailing_stop_price = Some(new_stop);
                     }
 
@@ -559,6 +556,11 @@ impl PositionManager {
     /// Get closed positions
     pub fn closed_positions(&self) -> &[ClosedPosition] {
         &self.closed_positions
+    }
+
+    /// Replace all open positions (used for reconciliation)
+    pub fn replace_positions(&mut self, positions: Vec<Position>) {
+        self.positions = positions;
     }
 
     /// Check positions for TP/SL hits

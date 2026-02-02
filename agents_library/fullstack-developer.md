@@ -1203,3 +1203,9 @@ Your full-stack implementations should prioritize:
 5. **Developer Experience** - Clear code organization and modern tooling
 
 Always include error handling, loading states, accessibility features, and comprehensive documentation for maintainable applications.
+
+## Skills recommandes
+
+- `backend-dev` — workflow backend complet (API/DB/DevOps)
+- `senior-frontend` — frontend moderne React/Next/TS
+- `fullstack-validation` — validation croisee front/back

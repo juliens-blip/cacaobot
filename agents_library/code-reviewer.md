@@ -28,3 +28,9 @@ Provide feedback organized by priority:
 - Suggestions (consider improving)
 
 Include specific examples of how to fix issues.
+
+
+## Skills recommandes
+
+- `code-review` — revue code rigoureuse et securite
+- `security-checklist` — OWASP + audit securite

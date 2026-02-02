@@ -417,6 +417,11 @@ impl TradingStrategy {
         &mut self.position_manager
     }
 
+    /// Replace open positions after broker reconciliation
+    pub fn reconcile_positions(&mut self, positions: Vec<Position>) {
+        self.position_manager.replace_positions(positions);
+    }
+
     /// Get risk state
     pub fn risk_state(&self) -> &RiskState {
         &self.risk_state
@@ -485,6 +490,7 @@ mod tests {
             stop_loss_percent: 1.5,
             max_positions: 1,
             max_daily_loss_percent: 5.0,
+            initial_balance: 10000.0,
         };
 
         TradingStrategy::new(strategy_config, trading_config, 10000.0)
@@ -735,6 +741,69 @@ mod tests {
         assert_eq!(format!("{}", Signal::Buy), "BUY");
         assert_eq!(format!("{}", Signal::Sell), "SELL");
         assert_eq!(format!("{}", Signal::Hold), "HOLD");
+    }
+
+    // TASK-PO-012: Additional strategy tests
+    #[test]
+    fn test_should_buy_oversold_bullish() {
+        let mut strategy = create_test_strategy();
+        strategy.set_trend_filter(false);
+        let rsi = 25.0;
+        let sentiment = 40;
+        assert!(strategy.should_buy(rsi, sentiment));
+    }
+
+    #[test]
+    fn test_should_buy_neutral() {
+        let mut strategy = create_test_strategy();
+        strategy.set_trend_filter(false);
+        let rsi = 50.0;
+        let sentiment = 0;
+        assert!(!strategy.should_buy(rsi, sentiment));
+    }
+
+    #[test]
+    fn test_should_sell_overbought_bearish() {
+        let mut strategy = create_test_strategy();
+        strategy.set_trend_filter(false);
+        let rsi = 75.0;
+        let sentiment = -40;
+        assert!(strategy.should_sell(rsi, sentiment));
+    }
+
+    #[test]
+    fn test_should_sell_neutral() {
+        let mut strategy = create_test_strategy();
+        strategy.set_trend_filter(false);
+        let rsi = 50.0;
+        let sentiment = 0;
+        assert!(!strategy.should_sell(rsi, sentiment));
+    }
+
+    #[test]
+    fn test_edge_cases_thresholds() {
+        let mut strategy = create_test_strategy();
+        strategy.set_trend_filter(false);
+
+        // RSI exactly at 30 (threshold) should NOT trigger buy (need < 30)
+        assert!(!strategy.should_buy(30.0, 50));
+        // RSI just below 30 should trigger buy
+        assert!(strategy.should_buy(29.9, 50));
+
+        // RSI exactly at 70 (threshold) should NOT trigger sell (need > 70)
+        assert!(!strategy.should_sell(70.0, -50));
+        // RSI just above 70 should trigger sell
+        assert!(strategy.should_sell(70.1, -50));
+
+        // Sentiment exactly at 30 should NOT trigger (need > 30)
+        assert!(!strategy.should_buy(25.0, 30));
+        // Sentiment just above 30 should trigger
+        assert!(strategy.should_buy(25.0, 31));
+
+        // Sentiment exactly at -30 should NOT trigger (need < -30)
+        assert!(!strategy.should_sell(75.0, -30));
+        // Sentiment just below -30 should trigger
+        assert!(strategy.should_sell(75.0, -31));
     }
 
     #[test]

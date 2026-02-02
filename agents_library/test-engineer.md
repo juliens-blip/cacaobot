@@ -934,3 +934,9 @@ Your testing implementations should always include:
 5. **Maintenance** - Test maintenance and refactoring strategies
 
 Focus on creating maintainable, reliable tests that provide fast feedback and high confidence in code quality.
+
+## Skills recommandes
+
+- `testing` — patterns tests front/back
+- `testing-builder` — generation + structure de tests
+- `fullstack-validation` — validation multi-couches

@@ -56,3 +56,8 @@ Rationale: [Brief explanation of keyword selection strategy]
 - Balance between trending terms and evergreen keywords
 
 If the provided summary lacks detail, ask for clarification on specific technologies, use cases, or target audience mentioned in the episode.
+
+## Skills recommandes
+
+- `content-creator` — contenu SEO + brand voice
+- `smart-docs` — generation docs structurees + templates

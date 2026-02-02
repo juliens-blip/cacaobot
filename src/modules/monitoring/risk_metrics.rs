@@ -1,138 +1,182 @@
-//! Risk metrics module for portfolio analysis
-//! Provides Sharpe, Sortino, Max Drawdown, VaR calculations
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
-use std::collections::VecDeque;
-
-const TRADING_DAYS: f64 = 252.0;
-
-/// Risk metrics calculator
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskMetrics {
-    returns: VecDeque<f64>,
-    max_size: usize,
+    trades: Vec<TradeReturn>,
     risk_free_rate: f64,
-    peak_value: f64,
-    current_drawdown: f64,
-    max_drawdown: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TradeReturn {
+    timestamp: DateTime<Utc>,
+    pnl: f64,
+    percentage_return: f64,
 }
 
 impl RiskMetrics {
     pub fn new(risk_free_rate: f64) -> Self {
         Self {
-            returns: VecDeque::with_capacity(252),
-            max_size: 252,
+            trades: Vec::new(),
             risk_free_rate,
-            peak_value: 0.0,
-            current_drawdown: 0.0,
-            max_drawdown: 0.0,
         }
     }
 
-    pub fn add_return(&mut self, daily_return: f64) {
-        if self.returns.len() >= self.max_size {
-            self.returns.pop_front();
-        }
-        self.returns.push_back(daily_return);
+    pub fn add_trade(&mut self, pnl: f64, entry_price: f64) {
+        let percentage_return = (pnl / entry_price) * 100.0;
+        self.trades.push(TradeReturn {
+            timestamp: Utc::now(),
+            pnl,
+            percentage_return,
+        });
     }
 
-    pub fn update_drawdown(&mut self, portfolio_value: f64) {
-        if portfolio_value > self.peak_value {
-            self.peak_value = portfolio_value;
-            self.current_drawdown = 0.0;
-        } else {
-            self.current_drawdown = (self.peak_value - portfolio_value) / self.peak_value;
-            if self.current_drawdown > self.max_drawdown {
-                self.max_drawdown = self.current_drawdown;
-            }
-        }
-    }
-
-    /// Sharpe Ratio = (Mean Return - Risk Free Rate) / Std Dev * sqrt(252)
-    pub fn sharpe_ratio(&self) -> Option<f64> {
-        if self.returns.len() < 30 {
-            return None;
-        }
-        let mean = self.mean_return();
-        let std = self.std_deviation()?;
-        if std == 0.0 {
-            return None;
-        }
-        let daily_rf = self.risk_free_rate / TRADING_DAYS;
-        Some((mean - daily_rf) / std * TRADING_DAYS.sqrt())
-    }
-
-    /// Sortino Ratio - only uses downside deviation
-    pub fn sortino_ratio(&self) -> Option<f64> {
-        if self.returns.len() < 30 {
-            return None;
-        }
-        let mean = self.mean_return();
-        let downside_std = self.downside_deviation()?;
-        if downside_std == 0.0 {
-            return None;
-        }
-        let daily_rf = self.risk_free_rate / TRADING_DAYS;
-        Some((mean - daily_rf) / downside_std * TRADING_DAYS.sqrt())
-    }
-
-    /// Maximum Drawdown
-    pub fn max_drawdown(&self) -> f64 {
-        self.max_drawdown
-    }
-
-    /// Current Drawdown
-    pub fn current_drawdown(&self) -> f64 {
-        self.current_drawdown
-    }
-
-    /// Value at Risk (95% confidence)
-    pub fn var_95(&self) -> Option<f64> {
-        if self.returns.len() < 30 {
-            return None;
-        }
-        let mean = self.mean_return();
-        let std = self.std_deviation()?;
-        Some(mean - 1.645 * std)
-    }
-
-    /// Returns count
-    pub fn returns_count(&self) -> usize {
-        self.returns.len()
-    }
-
-    fn mean_return(&self) -> f64 {
-        if self.returns.is_empty() {
+    pub fn sharpe_ratio(&self) -> f64 {
+        if self.trades.is_empty() {
             return 0.0;
         }
-        self.returns.iter().sum::<f64>() / self.returns.len() as f64
+
+        let returns: Vec<f64> = self.trades.iter().map(|t| t.percentage_return).collect();
+        let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
+        
+        let variance = returns.iter()
+            .map(|r| (r - mean_return).powi(2))
+            .sum::<f64>() / returns.len() as f64;
+        
+        let std_dev = variance.sqrt();
+        
+        if std_dev == 0.0 {
+            return 0.0;
+        }
+
+        (mean_return - self.risk_free_rate) / std_dev
     }
 
-    fn std_deviation(&self) -> Option<f64> {
-        if self.returns.len() < 2 {
-            return None;
+    pub fn sortino_ratio(&self) -> f64 {
+        if self.trades.is_empty() {
+            return 0.0;
         }
-        let mean = self.mean_return();
-        let variance = self.returns.iter()
-            .map(|r| (r - mean).powi(2))
-            .sum::<f64>() / (self.returns.len() - 1) as f64;
-        Some(variance.sqrt())
-    }
 
-    fn downside_deviation(&self) -> Option<f64> {
-        if self.returns.len() < 2 {
-            return None;
-        }
-        let negative_returns: Vec<f64> = self.returns.iter()
+        let returns: Vec<f64> = self.trades.iter().map(|t| t.percentage_return).collect();
+        let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
+        
+        let downside_returns: Vec<f64> = returns.iter()
             .filter(|&&r| r < 0.0)
             .copied()
             .collect();
-        if negative_returns.is_empty() {
-            return Some(0.0);
+        
+        if downside_returns.is_empty() {
+            return f64::INFINITY;
         }
-        let mean_neg = negative_returns.iter().sum::<f64>() / negative_returns.len() as f64;
-        let variance = negative_returns.iter()
-            .map(|r| (r - mean_neg).powi(2))
-            .sum::<f64>() / negative_returns.len() as f64;
-        Some(variance.sqrt())
+
+        let downside_variance = downside_returns.iter()
+            .map(|r| r.powi(2))
+            .sum::<f64>() / downside_returns.len() as f64;
+        
+        let downside_dev = downside_variance.sqrt();
+        
+        if downside_dev == 0.0 {
+            return f64::INFINITY;
+        }
+
+        (mean_return - self.risk_free_rate) / downside_dev
+    }
+
+    pub fn max_drawdown(&self) -> (f64, f64) {
+        if self.trades.is_empty() {
+            return (0.0, 0.0);
+        }
+
+        let mut cumulative = 0.0;
+        let mut peak = 0.0;
+        let mut max_dd = 0.0;
+        let mut max_dd_pct = 0.0;
+
+        for trade in &self.trades {
+            cumulative += trade.pnl;
+            peak = f64::max(peak, cumulative);
+            
+            let drawdown = peak - cumulative;
+            let drawdown_pct = if peak != 0.0 {
+                (drawdown / peak.abs()) * 100.0
+            } else {
+                0.0
+            };
+
+            max_dd = f64::max(max_dd, drawdown);
+            max_dd_pct = f64::max(max_dd_pct, drawdown_pct);
+        }
+
+        (max_dd, max_dd_pct)
+    }
+
+    pub fn value_at_risk(&self, confidence_level: f64) -> f64 {
+        if self.trades.is_empty() {
+            return 0.0;
+        }
+
+        let mut returns: Vec<f64> = self.trades.iter()
+            .map(|t| t.percentage_return)
+            .collect();
+        
+        returns.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        
+        let index = ((1.0 - confidence_level) * returns.len() as f64) as usize;
+        let index = index.min(returns.len() - 1);
+        
+        returns[index].abs()
+    }
+
+    pub fn expected_shortfall(&self, confidence_level: f64) -> f64 {
+        if self.trades.is_empty() {
+            return 0.0;
+        }
+
+        let mut returns: Vec<f64> = self.trades.iter()
+            .map(|t| t.percentage_return)
+            .collect();
+        
+        returns.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        
+        let cutoff_index = ((1.0 - confidence_level) * returns.len() as f64) as usize;
+        
+        if cutoff_index == 0 {
+            return returns[0].abs();
+        }
+
+        let tail_losses: Vec<f64> = returns.iter()
+            .take(cutoff_index)
+            .copied()
+            .collect();
+        
+        if tail_losses.is_empty() {
+            return 0.0;
+        }
+
+        (tail_losses.iter().sum::<f64>() / tail_losses.len() as f64).abs()
+    }
+
+    pub fn win_loss_ratio(&self) -> f64 {
+        let wins: Vec<&TradeReturn> = self.trades.iter().filter(|t| t.pnl > 0.0).collect();
+        let losses: Vec<&TradeReturn> = self.trades.iter().filter(|t| t.pnl < 0.0).collect();
+
+        if losses.is_empty() {
+            return f64::INFINITY;
+        }
+
+        let avg_win = if wins.is_empty() {
+            0.0
+        } else {
+            wins.iter().map(|t| t.pnl).sum::<f64>() / wins.len() as f64
+        };
+
+        let avg_loss = losses.iter().map(|t| t.pnl.abs()).sum::<f64>() / losses.len() as f64;
+
+        if avg_loss == 0.0 {
+            return f64::INFINITY;
+        }
+
+        avg_win / avg_loss
     }
 }
 
@@ -141,108 +185,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_metrics() {
-        let metrics = RiskMetrics::new(0.05);
-        assert_eq!(metrics.returns_count(), 0);
-        assert_eq!(metrics.max_drawdown(), 0.0);
-    }
-
-    #[test]
-    fn test_add_returns() {
-        let mut metrics = RiskMetrics::new(0.05);
-        for i in 0..10 {
-            metrics.add_return(0.01 * i as f64);
-        }
-        assert_eq!(metrics.returns_count(), 10);
-    }
-
-    #[test]
     fn test_sharpe_ratio() {
-        let mut metrics = RiskMetrics::new(0.05);
-        for i in 0..50 {
-            metrics.add_return(0.001 + (i % 3) as f64 * 0.0005);
-        }
+        let mut metrics = RiskMetrics::new(0.01);
+        metrics.add_trade(100.0, 1000.0);
+        metrics.add_trade(150.0, 1000.0);
+        metrics.add_trade(-50.0, 1000.0);
+        
         let sharpe = metrics.sharpe_ratio();
-        assert!(sharpe.is_some());
-        assert!(sharpe.unwrap() > 0.0);
-    }
-
-    #[test]
-    fn test_sharpe_ratio_insufficient_data() {
-        let mut metrics = RiskMetrics::new(0.05);
-        for _ in 0..20 {
-            metrics.add_return(0.001);
-        }
-        assert!(metrics.sharpe_ratio().is_none());
+        assert!(sharpe > 0.0);
     }
 
     #[test]
     fn test_sortino_ratio() {
-        let mut metrics = RiskMetrics::new(0.05);
-        for i in 0..50 {
-            // Mix of positive and negative returns
-            let ret = if i % 4 == 0 { -0.002 } else { 0.003 };
-            metrics.add_return(ret);
-        }
+        let mut metrics = RiskMetrics::new(0.01);
+        metrics.add_trade(100.0, 1000.0);
+        metrics.add_trade(150.0, 1000.0);
+        metrics.add_trade(-50.0, 1000.0);
+        
         let sortino = metrics.sortino_ratio();
-        assert!(sortino.is_some());
+        assert!(sortino > metrics.sharpe_ratio());
     }
 
     #[test]
     fn test_max_drawdown() {
-        let mut metrics = RiskMetrics::new(0.05);
-        metrics.update_drawdown(100.0);
-        metrics.update_drawdown(110.0);
-        metrics.update_drawdown(95.0);
-        // Drawdown from 110 to 95 = 15/110 = 0.1363...
-        assert!(metrics.max_drawdown() > 0.13);
-        assert!(metrics.max_drawdown() < 0.14);
+        let mut metrics = RiskMetrics::new(0.01);
+        metrics.add_trade(100.0, 1000.0);
+        metrics.add_trade(-200.0, 1000.0);
+        metrics.add_trade(50.0, 1000.0);
+        
+        let (dd_abs, dd_pct) = metrics.max_drawdown();
+        assert!(dd_abs > 0.0);
+        assert!(dd_pct > 0.0);
     }
 
     #[test]
-    fn test_drawdown_recovery() {
-        let mut metrics = RiskMetrics::new(0.05);
-        metrics.update_drawdown(100.0);
-        metrics.update_drawdown(80.0);  // 20% drawdown
-        metrics.update_drawdown(100.0); // Recovery
-        metrics.update_drawdown(120.0); // New peak
-        // Max drawdown should still be 20%
-        assert!((metrics.max_drawdown() - 0.20).abs() < 0.001);
-        // Current drawdown should be 0
-        assert_eq!(metrics.current_drawdown(), 0.0);
-    }
-
-    #[test]
-    fn test_var_95() {
-        let mut metrics = RiskMetrics::new(0.05);
-        for _ in 0..50 {
-            metrics.add_return(0.001);
+    fn test_value_at_risk_95() {
+        let mut metrics = RiskMetrics::new(0.01);
+        for i in 0..100 {
+            metrics.add_trade((i as f64 - 50.0) * 10.0, 1000.0);
         }
-        let var = metrics.var_95();
-        assert!(var.is_some());
+        
+        let var_95 = metrics.value_at_risk(0.95);
+        assert!(var_95 > 0.0);
     }
 
     #[test]
-    fn test_var_95_with_volatility() {
-        let mut metrics = RiskMetrics::new(0.05);
-        for i in 0..50 {
-            let ret = if i % 2 == 0 { 0.02 } else { -0.01 };
-            metrics.add_return(ret);
+    fn test_expected_shortfall() {
+        let mut metrics = RiskMetrics::new(0.01);
+        for i in 0..100 {
+            metrics.add_trade((i as f64 - 50.0) * 10.0, 1000.0);
         }
-        let var = metrics.var_95();
-        assert!(var.is_some());
-        // VaR should be negative given the volatility
-        assert!(var.unwrap() < 0.01);
+        
+        let es = metrics.expected_shortfall(0.95);
+        let var = metrics.value_at_risk(0.95);
+        assert!(es >= var);
     }
 
     #[test]
-    fn test_rolling_window() {
-        let mut metrics = RiskMetrics::new(0.05);
-        // Fill beyond capacity
-        for i in 0..300 {
-            metrics.add_return(i as f64 * 0.0001);
-        }
-        // Should be capped at max_size (252)
-        assert_eq!(metrics.returns_count(), 252);
+    fn test_win_loss_ratio() {
+        let mut metrics = RiskMetrics::new(0.01);
+        metrics.add_trade(200.0, 1000.0);
+        metrics.add_trade(200.0, 1000.0);
+        metrics.add_trade(-100.0, 1000.0);
+        
+        let ratio = metrics.win_loss_ratio();
+        assert!(ratio == 2.0);
     }
 }

@@ -656,3 +656,10 @@ Dès que l'utilisateur vous sollicite, commencez par:
 **Version:** 1.0
 **Dernière mise à jour:** 2025-11-26
 **Maintainer:** AGENT-MCP System
+
+
+## Skills recommandes
+
+- `agent-mail` — coordination + reservations fichiers
+- `agent-patterns` — protocoles inter-agents
+- `agent-swarm-workflow` — execution parallele structuree

@@ -232,4 +232,73 @@ mod tests {
         let score = analyzer.parse_sentiment("Palm oil prices surge on strong demand");
         assert!(score > 0);
     }
+
+    // TASK-PO-012: Additional sentiment tests
+    #[test]
+    fn test_parse_positive_sentiment() {
+        let analyzer = SentimentAnalyzer::new();
+        let score = analyzer.parse_sentiment("Score: +75");
+        assert_eq!(score, 75);
+    }
+
+    #[test]
+    fn test_parse_negative_sentiment() {
+        let analyzer = SentimentAnalyzer::new();
+        let score = analyzer.parse_sentiment("Sentiment: -50");
+        assert_eq!(score, -50);
+    }
+
+    #[test]
+    fn test_parse_invalid_sentiment() {
+        let analyzer = SentimentAnalyzer::new();
+        let score = analyzer.parse_sentiment("unclear text with no keywords");
+        assert_eq!(score, 0);
+    }
+
+    #[test]
+    fn test_sentiment_extraction_realistic() {
+        let analyzer = SentimentAnalyzer::new();
+        let perplexity_response = r#"
+            Based on current market analysis, FCPO palm oil futures show mixed signals.
+            Recent demand from China has been strong, with buyers showing optimistic sentiment.
+            However, some bearish indicators suggest potential resistance ahead.
+            Overall sentiment score: +45 (moderately bullish).
+        "#;
+        let score = analyzer.parse_sentiment(perplexity_response);
+        assert_eq!(score, 45);
+    }
+
+    #[test]
+    fn test_sentiment_clamping() {
+        let result = SentimentResult::new(150, "test");
+        assert_eq!(result.score, 100);
+
+        let result2 = SentimentResult::new(-150, "test");
+        assert_eq!(result2.score, -100);
+    }
+
+    #[test]
+    fn test_sentiment_type_classification() {
+        let bullish = SentimentResult::new(50, "test");
+        assert_eq!(bullish.sentiment_type, SentimentType::Bullish);
+
+        let bearish = SentimentResult::new(-50, "test");
+        assert_eq!(bearish.sentiment_type, SentimentType::Bearish);
+
+        let neutral = SentimentResult::new(10, "test");
+        assert_eq!(neutral.sentiment_type, SentimentType::Neutral);
+    }
+
+    #[test]
+    fn test_aggregate_sentiments() {
+        let analyzer = SentimentAnalyzer::new();
+        let results = vec![
+            SentimentResult::new(60, "source1").with_confidence(0.8),
+            SentimentResult::new(40, "source2").with_confidence(0.6),
+            SentimentResult::new(-20, "source3").with_confidence(0.4),
+        ];
+        let aggregated = analyzer.aggregate(&results);
+        assert!(aggregated.score > 20);
+        assert!(aggregated.confidence > 0.0);
+    }
 }

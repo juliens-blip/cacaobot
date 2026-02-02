@@ -7,18 +7,19 @@ fn main() -> Result<()> {
     // Compile cTrader Protobuf definitions
     // Note: proto files should be placed in proto/ directory
     
-    let proto_files = &["proto/ctrader.proto"];
+    let proto_files = &[
+        "proto/OpenApiCommonMessages.proto",
+        "proto/OpenApiCommonModelMessages.proto",
+        "proto/OpenApiMessages.proto",
+        "proto/OpenApiModelMessages.proto",
+    ];
     
-    // Check if proto files exist before compiling
-    let proto_exists = std::path::Path::new("proto/ctrader.proto").exists();
+    // Compile all cTrader Open API protobuf files
+    prost_build::compile_protos(proto_files, &["proto/"])?;
     
-    if proto_exists {
-        prost_build::compile_protos(proto_files, &["proto/"])?;
-        println!("cargo:rerun-if-changed=proto/ctrader.proto");
-    } else {
-        // If proto doesn't exist, create a stub to allow compilation
-        println!("cargo:warning=proto/ctrader.proto not found - using stub implementation");
-        println!("cargo:warning=Download cTrader proto files from: https://github.com/spotware/OpenApiProto");
+    // Re-run build if any proto file changes
+    for file in proto_files {
+        println!("cargo:rerun-if-changed={}", file);
     }
     
     Ok(())

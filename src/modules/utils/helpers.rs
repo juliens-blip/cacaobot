@@ -208,7 +208,7 @@ fn add_thousands_separator(s: &str) -> String {
     let start = if is_negative { 1 } else { 0 };
 
     for (i, c) in chars.iter().enumerate() {
-        if i > 0 && i >= start && (len - i) % 3 == 0 && i != start {
+        if i > 0 && i >= start && (len - i).is_multiple_of(3) && i != start {
             result.push(',');
         }
         result.push(*c);

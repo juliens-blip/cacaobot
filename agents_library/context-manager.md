@@ -63,3 +63,9 @@ When activated, you should:
 - Performance benchmarks
 
 Always optimize for relevance over completeness. Good context accelerates work; bad context creates confusion.
+
+
+## Skills recommandes
+
+- `docs-seeker` — recherche docs officielles versionnees
+- `md-docs` — workflows MAJ README/CLAUDE/AGENTS

@@ -283,3 +283,9 @@ Before completing any feature:
 ---
 
 **Ready to build amazing yacht interior transformations! 🚢✨**
+
+
+## Skills recommandes
+
+- `prompt-optimizer` — structuration des exigences vagues
+- `prompt-optimizer` — structuration des exigences + prompts efficaces

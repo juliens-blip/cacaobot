@@ -300,10 +300,10 @@ impl EventChannel {
         let mut sent_count = 0;
 
         for subscriber in subscribers.values() {
-            if subscriber.filter.matches(&event) {
-                if subscriber.sender.send(event.clone()).await.is_ok() {
-                    sent_count += 1;
-                }
+            if subscriber.filter.matches(&event)
+                && subscriber.sender.send(event.clone()).await.is_ok()
+            {
+                sent_count += 1;
             }
         }
 

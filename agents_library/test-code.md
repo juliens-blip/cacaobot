@@ -417,3 +417,10 @@ Phase 4: REPEAT
 **Version:** 1.0
 **Dernière mise à jour:** 2025-11-23
 **Maintainer:** ResidConnect Team
+
+
+## Skills recommandes
+
+- `testing` — patterns tests front/back
+- `testing-builder` — generation + structure de tests
+- `verification-mastery` — verification + anti-regressions
