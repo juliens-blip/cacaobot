@@ -475,8 +475,9 @@ async fn test_full_stack_position_size_calculation() {
 
     // With 1% risk on $10,000 = $100 risk
     // SL distance = 4850 - 4777.25 = 72.75
-    // Size = 100 / 72.75 = 1.37 -> capped at 1.0
-    assert!(size <= 1.0);
+    // Size = 100 / 72.75 ≈ 1.374 base currency units
+    let expected = 100.0 / (entry_price - stop_loss);
+    assert!((size - expected).abs() < 0.01, "size={} expected={}", size, expected);
     assert!(size > 0.0);
 }
 

@@ -53,7 +53,9 @@ fn test_complete_buy_signal_workflow() {
     let position_size = strategy.calculate_position_size(entry_price, sl_price);
     
     assert!(position_size > 0.0, "Position size should be positive");
-    assert!(position_size <= 1.0, "Position size should not exceed max");
+    // position_size is in base currency units (risk_amount / risk_per_unit)
+    let expected = 10000.0 * 0.01 / (entry_price - sl_price);
+    assert!((position_size - expected).abs() < 0.1, "Position size should match risk calc");
 }
 
 #[test]

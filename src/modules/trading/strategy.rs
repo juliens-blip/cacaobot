@@ -355,15 +355,19 @@ impl TradingStrategy {
         }
     }
 
-    /// Calculate position size based on risk
+    /// Calculate position size based on risk (returns base currency units)
+    ///
+    /// Formula: volume = risk_amount / risk_per_unit
+    /// The result is in base currency units. normalize_volume() in bot.rs
+    /// handles conversion to cTrader volume units and broker min/max/step.
     pub fn calculate_position_size(&self, entry_price: f64, stop_loss: f64) -> f64 {
         let risk_amount = self.account_balance * (self.trading_config.risk_per_trade / 100.0);
         let risk_per_unit = (entry_price - stop_loss).abs();
 
         if risk_per_unit > 0.0 {
-            (risk_amount / risk_per_unit).min(1.0) // Cap at 1.0 lot
+            risk_amount / risk_per_unit
         } else {
-            0.01 // Minimum lot size
+            0.0
         }
     }
 
@@ -708,12 +712,13 @@ mod tests {
 
         // With 1% risk on 10000 balance = 100 risk
         // Entry 4850, SL 4777.25 = 72.75 risk per unit
-        // Size = 100 / 72.75 = 1.37 -> capped at 1.0
+        // Size = 100 / 72.75 ≈ 1.374 base currency units
         let entry = 4850.0;
         let sl = strategy.calculate_stop_loss(entry, OrderSide::Buy);
         let size = strategy.calculate_position_size(entry, sl);
 
-        assert!(size <= 1.0);
+        let expected = 100.0 / (entry - sl);
+        assert!((size - expected).abs() < 0.01, "size={} expected={}", size, expected);
         assert!(size > 0.0);
     }
 

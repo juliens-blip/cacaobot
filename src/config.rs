@@ -292,6 +292,18 @@ impl Config {
         if self.trading.stop_loss_percent <= 0.0 {
             return Err(BotError::Config("STOP_LOSS_PERCENT must be positive".into()));
         }
+        // Verify position sizing stays within daily loss limit
+        let max_concurrent_risk = self.trading.max_positions as f64 * self.trading.risk_per_trade;
+        if max_concurrent_risk >= self.trading.max_daily_loss_percent {
+            return Err(BotError::Config(format!(
+                "Position sizing unsafe: {} positions × {:.1}% risk = {:.1}% >= {:.1}% daily loss limit. \
+                 Reduce MAX_POSITIONS or RISK_PER_TRADE.",
+                self.trading.max_positions,
+                self.trading.risk_per_trade,
+                max_concurrent_risk,
+                self.trading.max_daily_loss_percent,
+            )));
+        }
         Ok(())
     }
 }

@@ -13,11 +13,11 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tokio::time::{interval, timeout};
+use tokio::time::{interval, sleep, timeout};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tracing::{debug, error, info, warn};
@@ -104,7 +104,69 @@ pub struct OrderTicket {
     pub volume: i64, // in cents: 1 lot = 100 (volume in 0.01 units)
     pub stop_loss: Option<f64>,
     pub take_profit: Option<f64>,
+    pub relative_stop_loss: Option<i64>,
+    pub relative_take_profit: Option<i64>,
     pub label: Option<String>,
+}
+
+/// Symbol metadata used for order validation/normalization
+#[derive(Debug, Clone)]
+pub struct SymbolMeta {
+    pub symbol_id: i64,
+    pub digits: i32,
+    pub pip_position: i32,
+    pub min_volume: Option<i64>,
+    pub max_volume: Option<i64>,
+    pub step_volume: Option<i64>,
+    pub sl_distance: Option<u32>,
+    pub tp_distance: Option<u32>,
+    pub distance_set_in: Option<ProtoOaSymbolDistanceType>,
+    pub trading_mode: Option<ProtoOaTradingMode>,
+}
+
+impl SymbolMeta {
+    fn from_proto(symbol: &ProtoOaSymbol) -> Self {
+        let distance_set_in = symbol
+            .distance_set_in
+            .and_then(|v| ProtoOaSymbolDistanceType::try_from(v).ok());
+        let trading_mode = symbol
+            .trading_mode
+            .and_then(|v| ProtoOaTradingMode::try_from(v).ok());
+
+        Self {
+            symbol_id: symbol.symbol_id,
+            digits: symbol.digits,
+            pip_position: symbol.pip_position,
+            min_volume: symbol.min_volume,
+            max_volume: symbol.max_volume,
+            step_volume: symbol.step_volume,
+            sl_distance: symbol.sl_distance,
+            tp_distance: symbol.tp_distance,
+            distance_set_in,
+            trading_mode,
+        }
+    }
+
+    pub fn point_size(&self) -> Option<f64> {
+        if self.digits < 0 {
+            return None;
+        }
+        let factor = 10_f64.powi(self.digits);
+        Some(1.0 / factor)
+    }
+
+    pub fn min_distance_price(&self, entry_price: f64, distance: Option<u32>) -> Option<f64> {
+        let distance = distance?;
+        match self.distance_set_in.unwrap_or(ProtoOaSymbolDistanceType::SymbolDistanceInPoints) {
+            ProtoOaSymbolDistanceType::SymbolDistanceInPoints => {
+                let point = self.point_size()?;
+                Some(distance as f64 * point)
+            }
+            ProtoOaSymbolDistanceType::SymbolDistanceInPercentage => {
+                Some(entry_price * (distance as f64 / 100.0))
+            }
+        }
+    }
 }
 
 /// cTrader API client
@@ -122,6 +184,7 @@ pub struct CTraderClient {
     reader_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     oauth_manager: Option<Arc<OAuthManager>>,
     subscribed_symbols: Arc<RwLock<Vec<i64>>>,
+    symbol_meta_cache: Arc<RwLock<HashMap<i64, SymbolMeta>>>,
 }
 
 impl CTraderClient {
@@ -176,6 +239,7 @@ impl CTraderClient {
             reader_task: Arc::new(RwLock::new(None)),
             oauth_manager,
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
+            symbol_meta_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -279,9 +343,25 @@ impl CTraderClient {
         self.send_message(msg).await?;
 
         // Wait for application auth response
-        let _response =
-            self.wait_for_message(ProtoOaPayloadType::ProtoOaApplicationAuthRes).await?;
-        debug!("Application authenticated");
+        match self
+            .wait_for_message(ProtoOaPayloadType::ProtoOaApplicationAuthRes)
+            .await
+        {
+            Ok(_) => {
+                debug!("Application authenticated");
+            }
+            Err(err) => {
+                if let crate::error::BotError::CTrader(CTraderError::ApiError(message)) = &err {
+                    if message.contains("ALREADY_LOGGED_IN") {
+                        warn!("Application already authorized; continuing");
+                    } else {
+                        return Err(err);
+                    }
+                } else {
+                    return Err(err);
+                }
+            }
+        }
 
         // Step 2: Get access token
         let access_token = if self.environment.is_live() {
@@ -339,9 +419,23 @@ impl CTraderClient {
         let msg = new_proto_message(ProtoOaPayloadType::ProtoOaAccountAuthReq, account_auth_req);
         self.send_message(msg).await?;
 
-        // Wait for account auth response
-        let _response = self.wait_for_message(ProtoOaPayloadType::ProtoOaAccountAuthRes).await?;
-        info!("Account authenticated: {}", account_id);
+        // Wait for account auth response - handle ALREADY_LOGGED_IN
+        match self.wait_for_message(ProtoOaPayloadType::ProtoOaAccountAuthRes).await {
+            Ok(_) => {
+                info!("Account authenticated: {}", account_id);
+            }
+            Err(err) => {
+                if let crate::error::BotError::CTrader(CTraderError::ApiError(ref message)) = err {
+                    if message.contains("ALREADY_LOGGED_IN") || message.contains("ALREADY_AUTHENTICATED") || message.contains("103") {
+                        warn!("Account already authorized; continuing");
+                    } else {
+                        return Err(err);
+                    }
+                } else {
+                    return Err(err);
+                }
+            }
+        }
 
         *self.authenticated.write().await = true;
 
@@ -386,6 +480,23 @@ impl CTraderClient {
             symbols.push(symbol_id);
         }
 
+        // Wait for first price update to confirm subscription
+        let timeout_duration = Duration::from_secs(30);
+        let start = Instant::now();
+        while start.elapsed() < timeout_duration {
+            if self.prices.read().await.contains_key(&symbol_id) {
+                info!("✅ Subscribed to symbol {} (first price received)", symbol_id);
+                return Ok(());
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        warn!(
+            "⚠️ Subscription to symbol {} sent, but no price data received after {}s. \
+Possible causes: symbol invalid, market closed, or feed issue.",
+            symbol_id,
+            timeout_duration.as_secs()
+        );
         info!("Subscribed to symbol: {}", symbol_id);
         Ok(())
     }
@@ -419,16 +530,17 @@ impl CTraderClient {
             stop_price: None,
             time_in_force: None,
             expiration_timestamp: None,
-            stop_loss: ticket.stop_loss,
-            take_profit: ticket.take_profit,
+            // For MARKET orders, cTrader requires relative SL/TP (absolute values rejected).
+            stop_loss: None,
+            take_profit: None,
             comment: None,
             base_slippage_price: None,
             slippage_in_points: None,
             label: ticket.label.clone(),
             position_id: None,
             client_order_id: None,
-            relative_stop_loss: None,
-            relative_take_profit: None,
+            relative_stop_loss: ticket.relative_stop_loss,
+            relative_take_profit: ticket.relative_take_profit,
             guaranteed_stop_loss: None,
             trailing_stop_loss: None,
             stop_trigger_method: None,
@@ -689,7 +801,37 @@ impl CTraderClient {
                                     let description = err_res.description.as_deref().unwrap_or("none");
                                     
                                     // Check for authentication failures
-                                    if error_code.contains("AUTH_FAILURE") || error_code.contains("CH_CLIENT_AUTH_FAILURE") {
+                                    if error_code.contains("CH_CLIENT_NOT_AUTHENTICATED") {
+                                        auth_failure_count += 1;
+                                        error!(
+                                            "⚠️ NOT AUTHENTICATED (attempt {}/3): code={} desc={}",
+                                            auth_failure_count, error_code, description
+                                        );
+
+                                        *authenticated_clone.write().await = false;
+
+                                        match Self::reconnect_internal(
+                                            &mut config_clone,
+                                            environment,
+                                            &stream_arc,
+                                            &authenticated_clone,
+                                            &subscribed_symbols_clone,
+                                        ).await {
+                                            Ok(_) => {
+                                                info!("✅ Reconnected successfully after auth error");
+                                                auth_failure_count = 0;
+                                                continue;
+                                            }
+                                            Err(reconnect_err) => {
+                                                error!("Reconnection after auth error failed: {}", reconnect_err);
+                                                if auth_failure_count >= 3 {
+                                                    error!("❌ CRITICAL: 3 consecutive auth errors detected!");
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+                                        }
+                                    } else if error_code.contains("AUTH_FAILURE") || error_code.contains("CH_CLIENT_AUTH_FAILURE") {
                                         auth_failure_count += 1;
                                         error!(
                                             "❌ AUTHENTICATION FAILED (attempt {}/3): code={} desc={}",
@@ -940,6 +1082,34 @@ impl CTraderClient {
         
         // 2. Re-authenticate
         info!("Re-authenticating...");
+
+        async fn read_message(
+            stream: &mut TlsStream<TcpStream>,
+        ) -> Result<ProtoMessage> {
+            let mut len_buf = [0u8; 4];
+            timeout(Duration::from_secs(10), stream.read_exact(&mut len_buf))
+                .await
+                .map_err(|_| CTraderError::Timeout)?
+                .map_err(|e| CTraderError::ConnectionFailed(e.to_string()))?;
+
+            let msg_len = u32::from_be_bytes(len_buf) as usize;
+            if msg_len > 1_000_000 {
+                return Err(CTraderError::InvalidResponse(format!(
+                    "Message too large: {}",
+                    msg_len
+                ))
+                .into());
+            }
+
+            let mut msg_buf = vec![0u8; msg_len];
+            timeout(Duration::from_secs(10), stream.read_exact(&mut msg_buf))
+                .await
+                .map_err(|_| CTraderError::Timeout)?
+                .map_err(|e| CTraderError::ConnectionFailed(e.to_string()))?;
+
+            ProtoMessage::decode(msg_buf.as_ref())
+                .map_err(|e| CTraderError::InvalidResponse(format!("Decode error: {}", e)).into())
+        }
         
         // Application auth
         let app_auth_req = ProtoOaApplicationAuthReq {
@@ -956,6 +1126,47 @@ impl CTraderClient {
             if let Some(s) = stream_guard.as_mut() {
                 s.write_all(&encoded).await
                     .map_err(|e| CTraderError::ConnectionFailed(format!("Write failed: {}", e)))?;
+                // Wait for application auth response on this fresh connection
+                let response = read_message(s).await?;
+                let response_type = payload_type_from_u32(response.payload_type);
+
+                if response_type == Some(ProtoOaPayloadType::ProtoOaApplicationAuthRes) {
+                    // Success: received expected auth response
+                    debug!("Application authenticated during reconnect");
+                } else if response_type == Some(ProtoOaPayloadType::ProtoOaErrorRes) {
+                    // Check if it's ALREADY_LOGGED_IN (error 103) which is acceptable
+                    if let Some(payload) = &response.payload {
+                        if let Ok(err_res) = ProtoOaErrorRes::decode(payload.as_ref()) {
+                            let error_code = err_res.error_code;
+                            let description = err_res.description.as_deref().unwrap_or("none");
+
+                            // Accept ALREADY_LOGGED_IN or ALREADY_AUTHENTICATED (error 103)
+                            if error_code == "103" ||
+                               description.contains("ALREADY_LOGGED_IN") ||
+                               description.contains("ALREADY_AUTHENTICATED") {
+                                warn!("Application already authorized during reconnect; continuing (code={}, desc={})",
+                                      error_code, description);
+                            } else {
+                                return Err(CTraderError::ApiError(format!(
+                                    "Application authentication failed during reconnect: code={} desc={}",
+                                    error_code, description
+                                )).into());
+                            }
+                        } else {
+                            return Err(CTraderError::AuthFailed(
+                                "Application authentication failed during reconnect: invalid error response".into(),
+                            ).into());
+                        }
+                    } else {
+                        return Err(CTraderError::AuthFailed(
+                            "Application authentication failed during reconnect: error response without payload".into(),
+                        ).into());
+                    }
+                } else {
+                    return Err(CTraderError::AuthFailed(
+                        format!("Application authentication failed during reconnect: unexpected response type {:?}", response_type).into(),
+                    ).into());
+                }
             }
         }
         
@@ -1014,6 +1225,47 @@ impl CTraderClient {
             if let Some(s) = stream_guard.as_mut() {
                 s.write_all(&encoded).await
                     .map_err(|e| CTraderError::ConnectionFailed(format!("Write failed: {}", e)))?;
+                // Wait for account auth response
+                let response = read_message(s).await?;
+                let response_type = payload_type_from_u32(response.payload_type);
+
+                if response_type == Some(ProtoOaPayloadType::ProtoOaAccountAuthRes) {
+                    // Success: received expected auth response
+                    debug!("Account authenticated during reconnect");
+                } else if response_type == Some(ProtoOaPayloadType::ProtoOaErrorRes) {
+                    // Check if it's ALREADY_AUTHENTICATED (error 103) which is acceptable
+                    if let Some(payload) = &response.payload {
+                        if let Ok(err_res) = ProtoOaErrorRes::decode(payload.as_ref()) {
+                            let error_code = err_res.error_code;
+                            let description = err_res.description.as_deref().unwrap_or("none");
+
+                            // Accept ALREADY_AUTHENTICATED (error 103)
+                            if error_code == "103" ||
+                               description.contains("ALREADY_LOGGED_IN") ||
+                               description.contains("ALREADY_AUTHENTICATED") {
+                                warn!("Account already authorized during reconnect; continuing (code={}, desc={})",
+                                      error_code, description);
+                            } else {
+                                return Err(CTraderError::ApiError(format!(
+                                    "Account authentication failed during reconnect: code={} desc={}",
+                                    error_code, description
+                                )).into());
+                            }
+                        } else {
+                            return Err(CTraderError::AuthFailed(
+                                "Account authentication failed during reconnect: invalid error response".into(),
+                            ).into());
+                        }
+                    } else {
+                        return Err(CTraderError::AuthFailed(
+                            "Account authentication failed during reconnect: error response without payload".into(),
+                        ).into());
+                    }
+                } else {
+                    return Err(CTraderError::AuthFailed(
+                        format!("Account authentication failed during reconnect: unexpected response type {:?}", response_type).into(),
+                    ).into());
+                }
             }
         }
         
@@ -1033,7 +1285,7 @@ impl CTraderClient {
                     payload_type: None,
                     ctid_trader_account_id: account_id,
                     symbol_id: vec![symbol_id],
-                    subscribe_to_spot_timestamp: Some(false),
+                    subscribe_to_spot_timestamp: Some(true),
                 };
                 
                 let msg = new_proto_message(ProtoOaPayloadType::ProtoOaSubscribeSpotsReq, subscribe_req);
@@ -1132,6 +1384,79 @@ impl CTraderClient {
         }
 
         Err(CTraderError::InvalidResponse("Empty symbols list response".into()).into())
+    }
+
+    /// Fetch trader account info (balance, equity, etc.)
+    pub async fn get_trader(&self) -> Result<ProtoOaTrader> {
+        if !*self.authenticated.read().await {
+            return Err(CTraderError::AuthFailed("Not authenticated".into()).into());
+        }
+
+        let account_id = self
+            .config
+            .active_account_id()
+            .parse::<i64>()
+            .map_err(|e| CTraderError::Protocol(format!("Invalid account ID: {}", e)))?;
+
+        let trader_req = ProtoOaTraderReq {
+            payload_type: None,
+            ctid_trader_account_id: account_id,
+        };
+
+        let msg = new_proto_message(ProtoOaPayloadType::ProtoOaTraderReq, trader_req);
+        self.send_message(msg).await?;
+
+        let response = self.wait_for_message(ProtoOaPayloadType::ProtoOaTraderRes).await?;
+        if let Some(payload) = response.payload {
+            let trader_res = ProtoOaTraderRes::decode(payload.as_ref()).map_err(|e| {
+                CTraderError::InvalidResponse(format!("Failed to decode trader info: {}", e))
+            })?;
+            return Ok(trader_res.trader);
+        }
+
+        Err(CTraderError::InvalidResponse("Empty trader response".into()).into())
+    }
+
+    /// Fetch detailed symbol metadata (digits, volume steps, distances, etc.)
+    pub async fn get_symbol_meta(&self, symbol_id: i64) -> Result<SymbolMeta> {
+        if !*self.authenticated.read().await {
+            return Err(CTraderError::AuthFailed("Not authenticated".into()).into());
+        }
+
+        if let Some(meta) = self.symbol_meta_cache.read().await.get(&symbol_id) {
+            return Ok(meta.clone());
+        }
+
+        let account_id = self.config.active_account_id().parse::<i64>()
+            .map_err(|e| CTraderError::Protocol(format!("Invalid account ID: {}", e)))?;
+
+        let symbol_req = ProtoOaSymbolByIdReq {
+            payload_type: None,
+            ctid_trader_account_id: account_id,
+            symbol_id: vec![symbol_id],
+        };
+
+        let msg = new_proto_message(ProtoOaPayloadType::ProtoOaSymbolByIdReq, symbol_req);
+        self.send_message(msg).await?;
+
+        let response = self.wait_for_message(ProtoOaPayloadType::ProtoOaSymbolByIdRes).await?;
+
+        if let Some(payload) = response.payload {
+            let symbols_res = ProtoOaSymbolByIdRes::decode(payload.as_ref())
+                .map_err(|e| CTraderError::InvalidResponse(format!("Failed to decode symbol by id: {}", e)))?;
+
+            if let Some(symbol) = symbols_res.symbol.iter().find(|s| s.symbol_id == symbol_id) {
+                let meta = SymbolMeta::from_proto(symbol);
+                self.symbol_meta_cache.write().await.insert(symbol_id, meta.clone());
+                return Ok(meta);
+            }
+
+            return Err(CTraderError::InvalidResponse(
+                format!("Symbol ID {} not found in symbol-by-id response", symbol_id),
+            ).into());
+        }
+
+        Err(CTraderError::InvalidResponse("Empty symbol-by-id response".into()).into())
     }
 }
 

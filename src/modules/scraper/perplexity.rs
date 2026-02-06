@@ -16,26 +16,28 @@ use tracing::{debug, error, info, warn};
 /// Build a market sentiment prompt dynamically based on the trading symbol
 fn build_sentiment_prompt(symbol: &str) -> String {
     format!(
-        r#"Analyze the current market sentiment for {symbol} commodity futures.
+        r#"Analyze the SHORT-TERM market sentiment for {symbol} RIGHT NOW (next 5-30 minutes).
 
-Search for:
-1. Latest price movements and technical levels for {symbol}
-2. Supply/demand data, inventory reports, export/import flows
-3. Weather, geopolitical events, or regulations affecting {symbol}
-4. Trader positioning (COT report), social media sentiment, analyst forecasts
-5. Correlated markets and macro factors (USD, crude oil, interest rates)
+Focus on INTRADAY factors only:
+1. Latest price action and intraday technical levels for {symbol} (support/resistance, recent candles)
+2. Breaking news or events in the last 1-2 hours affecting {symbol}
+3. Real-time trader sentiment: X/Twitter, StockTwits, trading forums - what are traders saying RIGHT NOW
+4. Intraday order flow, momentum, and volatility
+5. Correlated markets current direction (USD index, yields, related pairs)
 
-Be aggressive in your assessment. Even small edges matter. If there is ANY directional bias, amplify it.
+IMPORTANT: Ignore long-term fundamentals. Only consider what moves the price in the NEXT 30 MINUTES.
+Be aggressive. Even small edges matter. Take a clear directional stance.
 
-Based on your analysis, provide:
-1. A sentiment score from -100 (extremely bearish) to +100 (extremely bullish). Do NOT default to 0. Take a stance.
-2. Key factors driving the sentiment
+Provide:
+1. A sentiment score from -100 (extremely bearish) to +100 (extremely bullish). Do NOT default to 0.
+2. Key intraday factors (max 3)
 3. Confidence level (low/medium/high)
 
 Format your response as:
 SENTIMENT_SCORE: [number]
 CONFIDENCE: [low/medium/high]
-SUMMARY: [brief explanation]"#
+SOCIAL_SENTIMENT: [bullish/bearish/neutral + 1 sentence]
+SUMMARY: [1-2 sentences on immediate direction]"#
     )
 }
 
@@ -153,6 +155,7 @@ impl PerplexityClient {
         let system_prompt = format!(
             "You are an aggressive commodities trader specializing in {}. \
             You look for short-term momentum plays and take decisive positions. \
+            Explicitly incorporate social/trader sentiment from X/Twitter, StockTwits, Reddit, and trading forums. \
             Provide concise, data-driven analysis. Always include a numerical sentiment score. \
             Never sit on the fence - if there's any edge, take a strong directional view.",
             self.symbol

@@ -37,6 +37,9 @@ pub type ProtoOASymbolsListRes = ProtoOaSymbolsListRes;
 pub type ProtoOALightSymbol = ProtoOaLightSymbol;
 pub type ProtoOAErrorRes = ProtoOaErrorRes;
 pub type ProtoOAOrderErrorEvent = ProtoOaOrderErrorEvent;
+pub type ProtoOATraderReq = ProtoOaTraderReq;
+pub type ProtoOATraderRes = ProtoOaTraderRes;
+pub type ProtoOATrader = ProtoOaTrader;
 
 /// Helper to create a ProtoMessage envelope wrapping a payload
 pub fn new_proto_message(payload_type: ProtoOaPayloadType, payload: impl Message) -> ProtoMessage {

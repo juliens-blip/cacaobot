@@ -23,7 +23,7 @@ pub mod strategy;
 
 pub use candles::{Candle, CandleBuilder, TimeFrame, Tick};
 pub use circuit_breakers::CircuitBreakers;
-pub use ctrader::{CTraderClient, CTraderEnvironment, Price, OrderTicket};
+pub use ctrader::{CTraderClient, CTraderEnvironment, Price, OrderTicket, SymbolMeta};
 pub use event_system::{MarketEvent, EventChannel, EventChannelHandle, EventFilter, EventType, AlertLevel, SubscriberId};
 pub use indicators::{RsiCalculator, PricePoint};
 pub use oauth::OAuthClient;

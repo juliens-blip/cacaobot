@@ -90,6 +90,8 @@ async fn main() -> anyhow::Result<()> {
         volume: 10, // 0.1 lot = 10 in cTrader units
         stop_loss: Some(4800.0),
         take_profit: Some(4950.0),
+        relative_stop_loss: None,
+        relative_take_profit: None,
         label: Some("Palm Oil Bot Test".to_string()),
     };
     info!("Order ticket created: {:?}", order_ticket);
